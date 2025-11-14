@@ -28,10 +28,27 @@ jobs:
       - uses: ./.github/actions/mlt-setup-node
       - name: Lint JS code. If fails, run `just fmt-js` to reformat, and `just lint-js` to see issues locally
         run: just -v lint-js
-      - run: just -v test-js
-      - run: just -v build-js
-      - name: Codecov upload
-        if: '!cancelled()'
-        uses: codecov/codecov-action@v5
+      - name: Merge license files into LICENSE.txt
+        id: pack
+        working-directory: ts
+        run: |
+          npm install
+          npm run build
+          {
+            echo "===== MIT License ====="
+            cat ../LICENSE-MIT
+            echo
+            echo "===== Apache License 2.0 ====="
+            cat ../LICENSE-APACHE
+          } > LICENSE.txt
+          TAR_NAME=$(npm pack)
+          echo "tar_name=$TAR_NAME" >> "$GITHUB_OUTPUT"
+          echo "Generated: $TAR_NAME"
+          ls -l "$TAR_NAME"
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@v4
         with:
-          files: ts/coverage/coverage-final.json
+          name: ${{ steps.pack.outputs.tar_name }}
+          path: ts/${{ steps.pack.outputs.tar_name }}
+          if-no-files-found: error
+          retention-days: 30

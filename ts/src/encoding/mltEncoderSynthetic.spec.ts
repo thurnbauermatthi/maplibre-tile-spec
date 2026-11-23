@@ -11,6 +11,12 @@ import { encodeTile, type Feature, type FeatureGeometry, type Layer, type Proper
  * Fixtures that cannot survive this round trip. Each is checked below to still *fail*, so an entry
  * that starts working fails the suite until it is removed from this list.
  */
+/**
+ * Fixtures that cannot survive this round trip because `encodeTile` emits Tag 0x01 layers,
+ * which have no wire representation for v2 `Meshes`, per-vertex/per-triangle `m-values`, or 3D `Z`.
+ * Each is checked below to still *fail*, so an entry that starts working fails the suite until
+ * it is removed from this list.
+ */
 const UNSUPPORTED: string[] = [
     // v2 3D Meshes
     "0x02/mesh_mvalues_both",
@@ -24,7 +30,6 @@ const UNSUPPORTED: string[] = [
     "0x02/mvalues_15props_7cols",
     "0x02/mvalues_16props",
     "0x02/mvalues_8cols",
-    "0x02/mvalues_all_null",
     "0x02/mvalues_bool",
     "0x02/mvalues_delta_rle",
     "0x02/mvalues_f32",
@@ -56,12 +61,6 @@ const UNSUPPORTED: string[] = [
     "0x02/mvalues_u32",
     "0x02/mvalues_u64",
     "0x02/mvalues_u8",
-    // v2 Nested columns
-    "0x02/nested_list_struct",
-    "0x02/nested_map_shapes",
-    "0x02/nested_map_str",
-    "0x02/nested_struct",
-    "0x02/nested_struct_shapes",
     // v2 3D Z coordinates
     "0x02/z_height_absolute",
     "0x02/z_height_relative_to_ground",

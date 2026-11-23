@@ -76,7 +76,7 @@ export default function decodeTile(
             throw new RangeError("Layer tag overruns block");
         }
         if (tag === 2) {
-            const layer = decodeSingleLayer02(tile.subarray(offset.get(), blockEnd), undefined, false);
+            const layer = decodeSingleLayer02(tile.subarray(offset.get(), blockEnd), true, false, undefined, false);
             featureTables.push(v2LayerToFeatureTable(layer, geometryScaling, idWithinMaxSafeInteger));
             offset.set(blockEnd);
             continue;
@@ -250,6 +250,7 @@ function v2LayerToFeatureTable(
 ): FeatureTable {
     const numFeatures = layer.featureCount;
     const geom = layer.geometry;
+    const stride = geom.dimension;
     let vertices = geom.vertices;
 
     if (geometryScaling) {
@@ -257,13 +258,15 @@ function v2LayerToFeatureTable(
         geometryScaling.scale = scale;
         const { min, max } = geometryScaling;
         const scaled = new Int32Array(vertices.length);
-        for (let i = 0; i < vertices.length; i += 2) {
+        for (let i = 0; i < vertices.length; i += stride) {
             scaled[i] = Math.min(Math.max(Math.round(vertices[i] * scale), min), max);
             scaled[i + 1] = Math.min(Math.max(Math.round(vertices[i + 1] * scale), min), max);
+            if (stride === 3) scaled[i + 2] = vertices[i + 2];
         }
         vertices = scaled;
     }
 
+    const vbType = stride === 3 ? VertexBufferType.VEC_3 : VertexBufferType.VEC_2;
     const types32 = Uint32Array.from(geom.types);
     let isConst = numFeatures > 0;
     let needsGeomOffsets = false;
@@ -272,7 +275,12 @@ function v2LayerToFeatureTable(
     for (let i = 0; i < numFeatures; i++) {
         const t = types32[i];
         if (t !== types32[0]) isConst = false;
-        if (t === GEOMETRY_TYPE.MULTIPOINT || t === GEOMETRY_TYPE.MULTILINESTRING || t === GEOMETRY_TYPE.MULTIPOLYGON) {
+        if (
+            t === GEOMETRY_TYPE.MULTIPOINT ||
+            t === GEOMETRY_TYPE.MULTILINESTRING ||
+            t === GEOMETRY_TYPE.MULTIPOLYGON ||
+            t === GEOMETRY_TYPE.MESH
+        ) {
             needsGeomOffsets = true;
         }
         if (
@@ -306,18 +314,12 @@ function v2LayerToFeatureTable(
                       geom.indexBuffer,
                       vertices,
                       topology,
+                      vbType,
                   )
-                : createFlatGpuVector(types32, geom.triangleOffsets, geom.indexBuffer, vertices, topology)
+                : createFlatGpuVector(types32, geom.triangleOffsets, geom.indexBuffer, vertices, topology, vbType)
             : isConst
-              ? new ConstGeometryVector(
-                    numFeatures,
-                    types32[0],
-                    VertexBufferType.VEC_2,
-                    topology ?? {},
-                    undefined,
-                    vertices,
-                )
-              : new FlatGeometryVector(VertexBufferType.VEC_2, types32, topology ?? {}, undefined, vertices);
+              ? new ConstGeometryVector(numFeatures, types32[0], vbType, topology ?? {}, undefined, vertices)
+              : new FlatGeometryVector(vbType, types32, topology ?? {}, undefined, vertices);
 
     let idVector: IdVector | undefined;
     if (layer.ids) {
@@ -331,8 +333,18 @@ function v2LayerToFeatureTable(
     }
 
     const propertyVectors: Vector[] = layer.properties.map((col) => v2PropertyToVector(col, numFeatures));
+    for (const ncol of layer.nested ?? []) {
+        const nullability = ncol.present ? new BitVector(ncol.present, numFeatures) : undefined;
+        propertyVectors.push(new ObjectFlatVector(ncol.name, [...ncol.values], nullability));
+    }
+
     return new FeatureTable(layer.name, geometryVector, idVector, propertyVectors, layer.extent, {
         version: 2,
+        zStep: geom.zStep,
+        heightMode: geom.heightMode,
+        vertexValues: layer.vertexValues,
+        triangleValues: layer.triangleValues,
+        mValues: layer.mValues,
         columnGeometry: geom,
     });
 }

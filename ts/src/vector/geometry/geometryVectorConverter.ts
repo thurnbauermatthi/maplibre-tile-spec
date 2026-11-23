@@ -22,6 +22,7 @@ export function convertGeometryVector(geometryVector: GeometryVector): Coordinat
     const nonOffset = !vertexOffsets || vertexOffsets.length === 0;
 
     const hasRingOffsets = Boolean(ringOffsets && ringOffsets.length > 0);
+    const stride = geometryVector.vertexBufferType === VertexBufferType.VEC_3 ? 3 : 2;
     const vertexBuffer = geometryVector.vertexBuffer;
 
     for (let i = 0; i < geometryVector.numGeometries; i++) {
@@ -32,8 +33,9 @@ export function convertGeometryVector(geometryVector: GeometryVector): Coordinat
                     let x: number;
                     let y: number;
                     if (nonOffset) {
-                        x = vertexBuffer[vertexBufferOffset++];
-                        y = vertexBuffer[vertexBufferOffset++];
+                        x = vertexBuffer[vertexBufferOffset];
+                        y = vertexBuffer[vertexBufferOffset + 1];
+                        vertexBufferOffset += stride;
                     } else if (geometryVector.vertexBufferType === VertexBufferType.MORTON) {
                         const offset = vertexOffsets[vertexOffsetsOffset++];
                         const mortonCode = vertexBuffer[offset];
@@ -45,7 +47,7 @@ export function convertGeometryVector(geometryVector: GeometryVector): Coordinat
                         x = vertex.x;
                         y = vertex.y;
                     } else {
-                        const offset = vertexOffsets[vertexOffsetsOffset++] * 2;
+                        const offset = vertexOffsets[vertexOffsetsOffset++] * stride;
                         x = vertexBuffer[offset];
                         y = vertexBuffer[offset + 1];
                     }
@@ -64,8 +66,9 @@ export function convertGeometryVector(geometryVector: GeometryVector): Coordinat
                     if (nonOffset) {
                         points = new Array(numPoints);
                         for (let j = 0; j < numPoints; j++) {
-                            const x = vertexBuffer[vertexBufferOffset++];
-                            const y = vertexBuffer[vertexBufferOffset++];
+                            const x = vertexBuffer[vertexBufferOffset];
+                            const y = vertexBuffer[vertexBufferOffset + 1];
+                            vertexBufferOffset += stride;
                             points[j] = new Point(x, y);
                         }
                     } else {
@@ -77,6 +80,7 @@ export function convertGeometryVector(geometryVector: GeometryVector): Coordinat
                             numPoints,
                             false,
                             mortonSettings,
+                            stride,
                         );
                         vertexOffsetsOffset += numPoints;
                     }
@@ -98,8 +102,8 @@ export function convertGeometryVector(geometryVector: GeometryVector): Coordinat
 
                     let vertices: Point[];
                     if (nonOffset) {
-                        vertices = getLineStringOrRing(vertexBuffer, vertexBufferOffset, numVertices, false);
-                        vertexBufferOffset += numVertices * 2;
+                        vertices = getLineStringOrRing(vertexBuffer, vertexBufferOffset, numVertices, false, stride);
+                        vertexBufferOffset += numVertices * stride;
                     } else {
                         vertices = decodeDictionaryEncodedVertices(
                             geometryVector.vertexBufferType,
@@ -109,6 +113,7 @@ export function convertGeometryVector(geometryVector: GeometryVector): Coordinat
                             numVertices,
                             false,
                             mortonSettings,
+                            stride,
                         );
                         vertexOffsetsOffset += numVertices;
                     }
@@ -133,13 +138,13 @@ export function convertGeometryVector(geometryVector: GeometryVector): Coordinat
                     ringOffsetsCounter++;
 
                     if (nonOffset) {
-                        shell = getLineStringOrRing(vertexBuffer, vertexBufferOffset, numVertices, true);
-                        vertexBufferOffset += numVertices * 2;
+                        shell = getLineStringOrRing(vertexBuffer, vertexBufferOffset, numVertices, true, stride);
+                        vertexBufferOffset += numVertices * stride;
                         for (let j = 0; j < rings.length; j++) {
                             numVertices = ringOffsets[ringOffsetsCounter] - ringOffsets[ringOffsetsCounter - 1];
                             ringOffsetsCounter++;
-                            rings[j] = getLineStringOrRing(vertexBuffer, vertexBufferOffset, numVertices, true);
-                            vertexBufferOffset += numVertices * 2;
+                            rings[j] = getLineStringOrRing(vertexBuffer, vertexBufferOffset, numVertices, true, stride);
+                            vertexBufferOffset += numVertices * stride;
                         }
                     } else {
                         shell = decodeDictionaryEncodedVertices(
@@ -150,6 +155,7 @@ export function convertGeometryVector(geometryVector: GeometryVector): Coordinat
                             numVertices,
                             true,
                             mortonSettings,
+                            stride,
                         );
                         vertexOffsetsOffset += numVertices;
                         for (let j = 0; j < rings.length; j++) {
@@ -163,6 +169,7 @@ export function convertGeometryVector(geometryVector: GeometryVector): Coordinat
                                 numVertices,
                                 true,
                                 mortonSettings,
+                                stride,
                             );
                             vertexOffsetsOffset += numVertices;
                         }
@@ -187,8 +194,14 @@ export function convertGeometryVector(geometryVector: GeometryVector): Coordinat
                         }
                         if (partOffsets) partOffsetCounter++;
                         if (nonOffset) {
-                            lineStrings[j] = getLineStringOrRing(vertexBuffer, vertexBufferOffset, numVertices, false);
-                            vertexBufferOffset += numVertices * 2;
+                            lineStrings[j] = getLineStringOrRing(
+                                vertexBuffer,
+                                vertexBufferOffset,
+                                numVertices,
+                                false,
+                                stride,
+                            );
+                            vertexBufferOffset += numVertices * stride;
                         } else {
                             const vertices = decodeDictionaryEncodedVertices(
                                 geometryVector.vertexBufferType,
@@ -198,6 +211,7 @@ export function convertGeometryVector(geometryVector: GeometryVector): Coordinat
                                 numVertices,
                                 false,
                                 mortonSettings,
+                                stride,
                             );
                             lineStrings[j] = vertices;
                             vertexOffsetsOffset += numVertices;
@@ -224,8 +238,8 @@ export function convertGeometryVector(geometryVector: GeometryVector): Coordinat
                         const numVertices = ringOffsets[ringOffsetsCounter] - ringOffsets[ringOffsetsCounter - 1];
                         ringOffsetsCounter++;
                         if (nonOffset) {
-                            shell = getLineStringOrRing(vertexBuffer, vertexBufferOffset, numVertices, true);
-                            vertexBufferOffset += numVertices * 2;
+                            shell = getLineStringOrRing(vertexBuffer, vertexBufferOffset, numVertices, true, stride);
+                            vertexBufferOffset += numVertices * stride;
                         } else {
                             shell = decodeDictionaryEncodedVertices(
                                 geometryVector.vertexBufferType,
@@ -235,6 +249,7 @@ export function convertGeometryVector(geometryVector: GeometryVector): Coordinat
                                 numVertices,
                                 true,
                                 mortonSettings,
+                                stride,
                             );
                             vertexOffsetsOffset += numVertices;
                         }
@@ -243,8 +258,14 @@ export function convertGeometryVector(geometryVector: GeometryVector): Coordinat
                                 ringOffsets[ringOffsetsCounter] - ringOffsets[ringOffsetsCounter - 1];
                             ringOffsetsCounter++;
                             if (nonOffset) {
-                                rings[k] = getLineStringOrRing(vertexBuffer, vertexBufferOffset, numRingVertices, true);
-                                vertexBufferOffset += numRingVertices * 2;
+                                rings[k] = getLineStringOrRing(
+                                    vertexBuffer,
+                                    vertexBufferOffset,
+                                    numRingVertices,
+                                    true,
+                                    stride,
+                                );
+                                vertexBufferOffset += numRingVertices * stride;
                             } else {
                                 rings[k] = decodeDictionaryEncodedVertices(
                                     geometryVector.vertexBufferType,
@@ -254,6 +275,7 @@ export function convertGeometryVector(geometryVector: GeometryVector): Coordinat
                                     numRingVertices,
                                     true,
                                     mortonSettings,
+                                    stride,
                                 );
                                 vertexOffsetsOffset += numRingVertices;
                             }
@@ -261,6 +283,22 @@ export function convertGeometryVector(geometryVector: GeometryVector): Coordinat
                         polygons[j] = [shell].concat(rings);
                     }
                     geometries[geometryCounter++] = polygons.flat();
+                }
+                break;
+            case GEOMETRY_TYPE.MESH:
+                {
+                    const numVertices = geometryOffsets
+                        ? geometryOffsets[geometryOffsetsCounter] - geometryOffsets[geometryOffsetsCounter - 1]
+                        : 0;
+                    if (geometryOffsets) geometryOffsetsCounter++;
+                    const points: Point[] = new Array(numVertices);
+                    for (let j = 0; j < numVertices; j++) {
+                        const x = vertexBuffer[vertexBufferOffset];
+                        const y = vertexBuffer[vertexBufferOffset + 1];
+                        vertexBufferOffset += stride;
+                        points[j] = new Point(x, y);
+                    }
+                    geometries[geometryCounter++] = points.map((point) => [point]);
                 }
                 break;
             default:
@@ -279,6 +317,7 @@ function decodeDictionaryEncodedVertices(
     numVertices: number,
     isRing: boolean,
     mortonSettings: MortonSettings,
+    stride = 2,
 ): Point[] {
     if (vertexBufferType === VertexBufferType.MORTON) {
         return decodeMortonDictionaryEncodedVertices(
@@ -290,7 +329,14 @@ function decodeDictionaryEncodedVertices(
             mortonSettings,
         );
     } else {
-        return decodeVec2DictionaryEncodedVertices(vertexBuffer, vertexOffsets, vertexOffset, numVertices, isRing);
+        return decodeVec2DictionaryEncodedVertices(
+            vertexBuffer,
+            vertexOffsets,
+            vertexOffset,
+            numVertices,
+            isRing,
+            stride,
+        );
     }
 }
 
@@ -299,13 +345,14 @@ function getLineStringOrRing(
     startIndex: number,
     numVertices: number,
     isRing: boolean,
+    stride = 2,
 ): Point[] {
     if (numVertices === 0) return [];
     const vertices: Point[] = new Array(isRing ? numVertices + 1 : numVertices);
-    for (let i = 0; i < numVertices * 2; i += 2) {
-        const x = vertexBuffer[startIndex + i];
-        const y = vertexBuffer[startIndex + i + 1];
-        vertices[i / 2] = new Point(x, y);
+    for (let i = 0; i < numVertices; i++) {
+        const x = vertexBuffer[startIndex + i * stride];
+        const y = vertexBuffer[startIndex + i * stride + 1];
+        vertices[i] = new Point(x, y);
     }
 
     if (isRing) {
@@ -320,14 +367,15 @@ function decodeVec2DictionaryEncodedVertices(
     vertexOffset: number,
     numVertices: number,
     isRing: boolean,
+    stride = 2,
 ): Point[] {
     if (numVertices === 0) return [];
     const vertices: Point[] = new Array(isRing ? numVertices + 1 : numVertices);
-    for (let i = 0; i < numVertices * 2; i += 2) {
-        const offset = vertexOffsets[vertexOffset + i / 2] * 2;
+    for (let i = 0; i < numVertices; i++) {
+        const offset = vertexOffsets[vertexOffset + i] * stride;
         const x = vertexBuffer[offset];
         const y = vertexBuffer[offset + 1];
-        vertices[i / 2] = new Point(x, y);
+        vertices[i] = new Point(x, y);
     }
 
     if (isRing) {

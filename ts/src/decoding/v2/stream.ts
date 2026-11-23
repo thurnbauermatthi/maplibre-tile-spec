@@ -54,6 +54,7 @@ export const ST_LEN_RINGS = 16;
 export const ST_LEN_TRIS = 17;
 export const ST_LEN_SYM = 18;
 export const ST_LEN_DICT = 19;
+export const ST_LEN_NESTED = 20;
 
 export const PH_NONE = 0;
 export const PH_FPF128 = 2;
@@ -82,6 +83,7 @@ export const FM_VERTEX = 4;
 export const FM_BYTES = 5;
 
 export const HAS_EXPLICIT_COUNT = 0x80;
+export const NO_Z = 99;
 
 const FAMILY_TABLE: readonly (readonly number[])[] = [
     [LG_NONE, LG_DELTA, LG_RLE, LG_DELTA_RLE, 104, LG_DELTA2],
@@ -102,6 +104,8 @@ export interface ParsedStream {
     mShift: number;
     alpScale: number;
     alpBase: bigint;
+    zStep: number;
+    heightMode: number;
     front: number;
     d: Uint8Array;
 }
@@ -126,10 +130,13 @@ export function parseStream02(
 
     if (family === FM_STR) {
         if (expectedStrLayout >= 0 && extField !== expectedStrLayout) throw new Error("v2 str ext");
+    } else if (family === FM_VERTEX) {
+        if (extField > 1) throw new Error("v2 vtx ext");
     } else if (extField !== 0) {
         throw new Error("v2 ext");
     }
 
+    const isXyz = family === FM_VERTEX && extField === 1;
     let p = PH_NONE;
     let omitsLen = false;
     let front = 0;
@@ -173,6 +180,10 @@ export function parseStream02(
             if (physField === 0x00) omitsLen = true;
             else if (physField !== 0x04) throw new Error("v2 float");
         } else p = physInt();
+    } else if (isXyz) {
+        if (l === LG_NONE) p = rawInt();
+        else if (l === LG_DELTA || l === LG_CW_DELTA) p = physInt();
+        else throw new Error("v2 xyz");
     } else {
         if (l === LG_NONE) p = rawInt();
         else if (l === LG_RANS) {
@@ -192,6 +203,8 @@ export function parseStream02(
             mShift: 0,
             alpScale: 0,
             alpBase: 0n,
+            zStep: NO_Z,
+            heightMode: 0,
             front,
             d: readBytes(r, byteLen),
         };
@@ -199,7 +212,7 @@ export function parseStream02(
 
     const n = explicit ? readVarintU32(r) : impliedCount;
     if (n < 0) throw new Error("v2 no count");
-    const wpv = family === FM_VERTEX && l !== LG_MORTON ? 2 : 1;
+    const wpv = isXyz ? 3 : family === FM_VERTEX && l !== LG_MORTON ? 2 : 1;
     const w = n * wpv;
     if (!Number.isSafeInteger(w) || w > 0xffffffff) throw new RangeError("overflow");
 
@@ -216,6 +229,8 @@ export function parseStream02(
             mShift: 0,
             alpScale: 0,
             alpBase: 0n,
+            zStep: NO_Z,
+            heightMode: 0,
             front: 0,
             d,
         };
@@ -228,17 +243,24 @@ export function parseStream02(
     let mShift = 0;
     let alpScale = 0;
     let alpBase = 0n;
+    let zStep = NO_Z;
+    let heightMode = 0;
 
     if (family === FM_FLOAT && l === LG_ALP) {
         alpScale = parseAlpScale(readU8(r));
         alpBase = readVarintI64(r);
+    } else if (isXyz) {
+        const cb = readU8(r);
+        if (cb >= 16) throw new Error("z_step");
+        zStep = (cb & 7) - 3;
+        heightMode = (cb & 8) >>> 3;
     } else if (family === FM_VERTEX && l === LG_MORTON) {
         mBits = readVarintU32(r);
         mShift = readVarintU32(r);
         if (mBits > 16) throw new Error("morton bits");
     }
 
-    return { t, l, p, n, w, mBits, mShift, alpScale, alpBase, front, d: readBytes(r, byteLen) };
+    return { t, l, p, n, w, mBits, mShift, alpScale, alpBase, zStep, heightMode, front, d: readBytes(r, byteLen) };
 }
 
 export function decodeBoolValues(s: ParsedStream): Uint8Array {
@@ -284,6 +306,12 @@ export function decodeStreamI32(s: ParsedStream, scratch = false): Int32Array {
     if (s.l === LG_DELTA_RLE) return asI32(zigzagDelta32InPlace(decodeRleU32(s, scratch)));
 
     const out = decodePhysicalU32(s, scratch ? scratchU32(s.w) : allocU32(s.w));
+    if (s.zStep !== NO_Z) {
+        if (s.l === LG_NONE) return zigzagI32InPlace(out);
+        if (s.l === LG_DELTA) return asI32(zigzagDelta32InPlace(out));
+        if (s.l === LG_CW_DELTA) return cwDeltaVecInPlace(out, 3);
+        throw new Error("xyz log");
+    }
     if (s.l === LG_NONE) return zigzagI32InPlace(out);
     if (s.l === LG_DELTA || s.l === LG_DELTA2) return asI32(zigzagDelta32InPlace(out, s.l === LG_DELTA2 ? 2 : 1));
     if (s.l === LG_CW_DELTA || s.l === LG_CW_DELTA2) return cwDeltaVecInPlace(out, 2, s.l === LG_CW_DELTA2 ? 2 : 1);

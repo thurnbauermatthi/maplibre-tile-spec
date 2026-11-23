@@ -1,5 +1,5 @@
 import { setOwnProp } from "../decoding/v2/binary";
-import type { V2GeometryColumns } from "../decoding/v2/layer";
+import type { HeightMode, V2GeometryColumns, V2MValueColumn } from "../decoding/v2/layer";
 import { GEOMETRY_TYPE } from "./geometry/geometryType";
 import type { Geometry, GeometryVector } from "./geometry/geometryVector";
 import type Vector from "./vector";
@@ -14,11 +14,23 @@ export interface Feature {
     id: number | bigint | undefined;
     geometry: Geometry;
     properties: { [key: string]: unknown };
+    z?: number[];
+    triangles?: [number, number, number][];
 }
 
 export interface FeatureTableV2Meta {
     version: 1 | 2;
+    zStep?: number;
+    heightMode?: HeightMode;
+    vertexValues: readonly V2MValueColumn[];
+    triangleValues: readonly V2MValueColumn[];
+    mValues: readonly V2MValueColumn[];
     columnGeometry: V2GeometryColumns;
+}
+
+function lineVertexStart(geom: V2GeometryColumns, line: number): number {
+    const p = geom.partOffsets === undefined ? line : geom.partOffsets[line];
+    return geom.ringOffsets === undefined ? p : geom.ringOffsets[p];
 }
 
 export default class FeatureTable {
@@ -73,6 +85,26 @@ export default class FeatureTable {
         return this._v2Meta?.version ?? 1;
     }
 
+    get zStep(): number | undefined {
+        return this._v2Meta?.zStep;
+    }
+
+    get heightMode(): HeightMode | undefined {
+        return this._v2Meta?.heightMode;
+    }
+
+    get vertexValues(): readonly V2MValueColumn[] {
+        return this._v2Meta?.vertexValues ?? [];
+    }
+
+    get triangleValues(): readonly V2MValueColumn[] {
+        return this._v2Meta?.triangleValues ?? [];
+    }
+
+    get mValues(): readonly V2MValueColumn[] {
+        return this._v2Meta?.mValues ?? [];
+    }
+
     /**
      * Returns all features as an array
      */
@@ -119,7 +151,51 @@ export default class FeatureTable {
                 }
             }
 
-            features.push({ id, geometry, properties });
+            const feature: Feature = { id, geometry, properties };
+
+            if (colGeom !== undefined && colGeom.dimension === 3) {
+                if (trisOnly && colGeom.triangleOffsets && colGeom.indexBuffer) {
+                    const lo = colGeom.triangleOffsets[i] * 3;
+                    const hi = colGeom.triangleOffsets[i + 1] * 3;
+                    const z = new Array<number>(hi - lo);
+                    for (let k = lo; k < hi; k++) {
+                        z[k - lo] = colGeom.vertices[colGeom.indexBuffer[k] * 3 + 2];
+                    }
+                    feature.z = z;
+                } else {
+                    const g0 = colGeom.geometryOffsets ? colGeom.geometryOffsets[i] : i;
+                    const g1 = colGeom.geometryOffsets ? colGeom.geometryOffsets[i + 1] : i + 1;
+                    const v0 = lineVertexStart(colGeom, g0);
+                    const v1 = lineVertexStart(colGeom, g1);
+                    const z = new Array<number>(v1 - v0);
+                    for (let v = v0; v < v1; v++) {
+                        z[v - v0] = colGeom.vertices[v * 3 + 2];
+                    }
+                    feature.z = z;
+                }
+            }
+
+            if (
+                colGeom !== undefined &&
+                geomType === GEOMETRY_TYPE.MESH &&
+                colGeom.triangleOffsets &&
+                colGeom.indexBuffer
+            ) {
+                const v0 = colGeom.geometryOffsets ? colGeom.geometryOffsets[i] : i;
+                const t0 = colGeom.triangleOffsets[i];
+                const t1 = colGeom.triangleOffsets[i + 1];
+                const tris = new Array<[number, number, number]>(t1 - t0);
+                for (let t = t0; t < t1; t++) {
+                    tris[t - t0] = [
+                        colGeom.indexBuffer[t * 3] - v0,
+                        colGeom.indexBuffer[t * 3 + 1] - v0,
+                        colGeom.indexBuffer[t * 3 + 2] - v0,
+                    ];
+                }
+                feature.triangles = tris;
+            }
+
+            features.push(feature);
         }
         return features;
     }

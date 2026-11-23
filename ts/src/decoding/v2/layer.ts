@@ -9,35 +9,41 @@ import {
     allocU32,
     allocU64,
     cursor,
-    peekU8,
+    deinterleaveU64,
     readStr,
     readU8,
     readVarintU32,
+    readVarintU64,
     resetBudget,
 } from "./binary";
-import { decodeGeometry02 } from "./geometry";
+import { GEOM_MESH, decodeGeometry02, vertexIndexAt } from "./geometry";
+import {
+    type RawColumnValues02,
+    type RawNestedColumn,
+    decodeNestedColumn,
+    decodeScalarValues,
+    parseColumnValues02,
+    parseNested02,
+} from "./nested";
 import {
     type MutableIndexable,
     PRES_BITMAP,
     bitmapPopcount,
+    isBitSet,
     normalizePresentBitmap,
     readPresenceBits,
     scatterPresent,
 } from "./presence";
 import {
-    FM_BOOL,
     FM_BYTES,
-    FM_FLOAT,
     FM_INT,
     FM_STR,
     FM_VERTEX,
-    HAS_EXPLICIT_COUNT,
-    LG_DICT,
+    NO_Z,
     type ParsedStream,
     ST_DATA_FSST,
     ST_DATA_NONE,
     ST_DATA_SHARED,
-    ST_DATA_SINGLE,
     ST_DATA_VERTEX,
     ST_LEN_DICT,
     ST_LEN_GEOM,
@@ -50,37 +56,34 @@ import {
     ST_OFF_TREE_CYC,
     ST_OFF_TREE_SYM,
     ST_OFF_VERTEX,
-    decodeBoolValues,
-    decodeFloatValues,
-    decodeStreamI8,
-    decodeStreamI32,
-    decodeStreamI64,
-    decodeStreamU8,
     decodeStreamU32,
     decodeStreamU64,
     parseStream02,
 } from "./stream";
 import {
     type RawSharedDict,
-    type RawStringsStreamSet,
     decodeSharedDictColumns,
     decodeStringsDense,
     materializeStringProperty,
-    parseStrings02,
+    stringCodesForMValue,
 } from "./strings";
 
-export type V2GeometryLayout = "outlines" | "tessPolygons" | "tessPolygonsWithOutlines";
+export type HeightMode = "absolute" | "relativeToGround";
+export type V2GeometryLayout = "outlines" | "tessPolygons" | "tessPolygonsWithOutlines" | "meshes";
 
 export interface V2GeometryColumns {
     readonly types: Uint8Array;
     readonly layout: V2GeometryLayout;
-    readonly dimension: 2;
+    readonly meshes?: true;
+    readonly dimension: 2 | 3;
     readonly vertices: Int32Array;
     readonly geometryOffsets?: Uint32Array;
     readonly partOffsets?: Uint32Array;
     readonly ringOffsets?: Uint32Array;
     readonly triangleOffsets?: Uint32Array;
     readonly indexBuffer?: Uint32Array;
+    readonly zStep?: number;
+    readonly heightMode?: HeightMode;
 }
 
 export type V2IdColumn =
@@ -116,6 +119,54 @@ export type V2PropertyColumn =
     | V2ScalarPropertyColumn<"f64", Float64Array>
     | V2StringPropertyColumn;
 
+export type V2MValueScope = "vertex" | "triangle";
+
+export interface V2ScalarMValueColumn<K extends string, A> {
+    readonly name: string;
+    readonly scope: V2MValueScope;
+    readonly kind: K;
+    readonly present?: Uint8Array;
+    readonly offsets: Uint32Array;
+    readonly values: A;
+}
+
+export type V2StringMValueColumn =
+    | {
+          readonly name: string;
+          readonly scope: V2MValueScope;
+          readonly kind: "str";
+          readonly present?: Uint8Array;
+          readonly offsets: Uint32Array;
+          readonly values: readonly string[];
+      }
+    | {
+          readonly name: string;
+          readonly scope: V2MValueScope;
+          readonly kind: "strDict";
+          readonly present?: Uint8Array;
+          readonly offsets: Uint32Array;
+          readonly codes: Uint32Array;
+          readonly dictionary: readonly string[];
+      };
+
+export type V2MValueColumn =
+    | V2ScalarMValueColumn<"bool", Uint8Array>
+    | V2ScalarMValueColumn<"i8", Int8Array>
+    | V2ScalarMValueColumn<"u8", Uint8Array>
+    | V2ScalarMValueColumn<"i32", Int32Array>
+    | V2ScalarMValueColumn<"u32", Uint32Array>
+    | V2ScalarMValueColumn<"i64", BigInt64Array>
+    | V2ScalarMValueColumn<"u64", BigUint64Array>
+    | V2ScalarMValueColumn<"f32", Float32Array>
+    | V2ScalarMValueColumn<"f64", Float64Array>
+    | V2StringMValueColumn;
+
+export interface V2NestedColumn {
+    readonly name: string;
+    readonly present?: Uint8Array;
+    readonly values: readonly unknown[];
+}
+
 export interface V2Layer {
     readonly name: string;
     readonly extent: number;
@@ -124,61 +175,10 @@ export interface V2Layer {
     readonly geometry: V2GeometryColumns;
     readonly ids?: V2IdColumn;
     readonly properties: readonly V2PropertyColumn[];
-}
-
-type RawScalarColumn02 =
-    | { dt: 2 | 3 | 4 | 5 | 6 | 7 | 8; s: ParsedStream; d: null }
-    | { dt: 9 | 10; s: ParsedStream; d: ParsedStream | null };
-
-type RawColumnValues02 = RawScalarColumn02 | { dt: 11; s: RawStringsStreamSet; d: null };
-
-type DecodedScalar =
-    | { kind: "bool"; values: Uint8Array }
-    | { kind: "i8"; values: Int8Array }
-    | { kind: "u8"; values: Uint8Array }
-    | { kind: "i32"; values: Int32Array }
-    | { kind: "u32"; values: Uint32Array }
-    | { kind: "i64"; values: BigInt64Array }
-    | { kind: "u64"; values: BigUint64Array }
-    | { kind: "f32"; values: Float32Array }
-    | { kind: "f64"; values: Float64Array };
-
-function decodeScalarValues(cv: RawScalarColumn02, scratch = false, owned64 = false): DecodedScalar {
-    switch (cv.dt) {
-        case 2:
-            return { kind: "bool", values: decodeBoolValues(cv.s) };
-        case 3:
-            return { kind: "i8", values: decodeStreamI8(cv.s) };
-        case 4:
-            return { kind: "u8", values: decodeStreamU8(cv.s) };
-        case 5:
-            return { kind: "i32", values: decodeStreamI32(cv.s, scratch) };
-        case 6:
-            return { kind: "u32", values: decodeStreamU32(cv.s, scratch) };
-        case 7:
-            return { kind: "i64", values: decodeStreamI64(cv.s, owned64) };
-        case 8:
-            return { kind: "u64", values: decodeStreamU64(cv.s, owned64) };
-        case 9:
-            return { kind: "f32", values: decodeFloatValues(cv.s, cv.d, true) as Float32Array };
-        case 10:
-            return { kind: "f64", values: decodeFloatValues(cv.s, cv.d, false) as Float64Array };
-    }
-}
-
-function parseColumnValues02(r: ByteReader, dt: number, impliedCount: number): RawColumnValues02 {
-    if (impliedCount < 0 && (peekU8(r) & HAS_EXPLICIT_COUNT) === 0) throw new Error("explicit count");
-    if (dt === 2) return { dt: 2, s: parseStream02(r, FM_BOOL, 4, ST_DATA_NONE, impliedCount), d: null };
-    if (dt >= 3 && dt <= 6)
-        return { dt: dt as 3 | 4 | 5 | 6, s: parseStream02(r, FM_INT, 4, ST_DATA_NONE, impliedCount), d: null };
-    if (dt === 7 || dt === 8) return { dt, s: parseStream02(r, FM_INT, 8, ST_DATA_NONE, impliedCount), d: null };
-    if (dt === 9 || dt === 10) {
-        const w = dt === 9 ? 4 : 8;
-        const s = parseStream02(r, FM_FLOAT, w, ST_DATA_NONE, impliedCount);
-        return { dt, s, d: s.l === LG_DICT ? parseStream02(r, FM_FLOAT, w, ST_DATA_SINGLE, s.n) : null };
-    }
-    if (dt === 11) return { dt: 11, s: parseStrings02(r, impliedCount), d: null };
-    throw new Error("col type");
+    readonly nested?: readonly V2NestedColumn[];
+    readonly vertexValues: readonly V2MValueColumn[];
+    readonly triangleValues: readonly V2MValueColumn[];
+    readonly mValues: readonly V2MValueColumn[];
 }
 
 type TypedCol<V> = ArrayLike<V> & MutableIndexable<V> & { set(src: ArrayLike<V>): void };
@@ -260,19 +260,52 @@ function readColPresence02(
     return sharedBitfields[idx];
 }
 
+function decodeMValue02(
+    name: string,
+    scope: V2MValueScope,
+    bits: Uint8Array | undefined,
+    cv: RawColumnValues02,
+    geometry: V2GeometryColumns,
+    featureCount: number,
+): V2MValueColumn {
+    const present = normalizePresentBitmap(bits, featureCount);
+    const offsets = allocU32(featureCount + 1);
+    let cursorPos = 0;
+    const triOff = geometry.triangleOffsets;
+    for (let f = 0; f < featureCount; f++) {
+        if (present === undefined || isBitSet(present, f)) {
+            cursorPos +=
+                scope === "triangle"
+                    ? triOff
+                        ? triOff[f + 1] - triOff[f]
+                        : 0
+                    : vertexIndexAt(geometry, f + 1) - vertexIndexAt(geometry, f);
+        }
+        offsets[f + 1] = cursorPos;
+    }
+    const base = { name, scope, offsets, ...(present !== undefined ? { present } : {}) };
+    if (cv.dt === 11) {
+        const { codes, dictionary } = stringCodesForMValue(decodeStringsDense(cv.s, true));
+        if (codes.length !== cursorPos) throw new Error("mval len");
+        return { ...base, kind: "strDict", codes, dictionary };
+    }
+    const dec = decodeScalarValues(cv, false, true);
+    if (dec.values.length !== cursorPos) throw new Error("mval len");
+    return { ...base, ...dec };
+}
+
 const GEO_HAS_GEO = 0x6ccc;
 const GEO_HAS_PARTS = 0x2ff0;
 const GEO_HAS_RINGS = 0x2f00;
 
-function decodeLayer02(r: ByteReader): V2Layer {
+function decodeLayer02(r: ByteReader, includeNested: boolean, nestedJsonMode: boolean): V2Layer {
     const name = readStr(r);
     if (name.length === 0) throw new Error("v2 name");
 
     const hdr = readU8(r);
     const hasMValues = (hdr & 0x80) !== 0;
-    if (hasMValues) throw new Error("v2 mvalues unsupported");
     const uniNib = (hdr & 0x70) >>> 4;
-    if (uniNib > 6) throw new Error("v2 hdr");
+    if (uniNib > 7) throw new Error("v2 hdr");
     const uniformType = uniNib === 0 ? -1 : uniNib - 1;
     const extent = 1 << ((hdr & 0x0f) + 6);
     const featureCount = readVarintU32(r);
@@ -281,7 +314,9 @@ function decodeLayer02(r: ByteReader): V2Layer {
     const sharedCoded = (layout & 0x80) !== 0;
     const sharedCount = (layout & 0x70) >>> 4;
     const geoLayout = layout & 0x0f;
-    if ((sharedCoded && sharedCount === 0) || geoLayout > 0x0d) throw new Error("v2 layout");
+    if ((sharedCoded && sharedCount === 0) || geoLayout > 0x0e) throw new Error("v2 layout");
+    if (hasMValues && (geoLayout === 0 || geoLayout === 1 || geoLayout === 0x0c)) throw new Error("v2 mval layout");
+    if ((uniformType === GEOM_MESH) !== (geoLayout === 0x0e)) throw new Error("v2 mesh layout");
 
     const sharedBitfields: Uint8Array[] = new Array(sharedCount);
     for (let i = 0; i < sharedCount; i++) {
@@ -307,17 +342,27 @@ function decodeLayer02(r: ByteReader): V2Layer {
             parseStream02(r, FM_INT, 4, ST_OFF_TREE_CYC, featureCount),
         );
     }
-    items.push(parseStream02(r, FM_VERTEX, 4, ST_DATA_VERTEX, featureCount));
+    const vtxStream = parseStream02(r, FM_VERTEX, 4, ST_DATA_VERTEX, featureCount);
+    if (geoLayout === 0x0e && vtxStream.zStep === NO_Z) throw new Error("v2 mesh z");
+    items.push(vtxStream);
     if (geoLayout <= 0x0b && (geoLayout & 1) === 1)
         items.push(parseStream02(r, FM_INT, 4, ST_OFF_VERTEX, featureCount));
 
     const geometry = decodeGeometry02(uniformType, featureCount, typesStream, items);
 
-    const columnCount = readVarintU32(r);
+    let columnCount: number;
+    let mValueCount = 0;
+    if (!hasMValues) {
+        columnCount = readVarintU32(r);
+    } else {
+        [columnCount, mValueCount] = deinterleaveU64(readVarintU64(r));
+        if (mValueCount === 0) throw new Error("v2 empty mvals");
+    }
     if (r.e - r.p < columnCount) throw new RangeError("v2 cols eof");
 
     let ids: V2IdColumn | undefined;
     const properties: V2PropertyColumn[] = [];
+    const rawNested: RawNestedColumn[] | null = includeNested ? [] : null;
     const seen = new Set<string>();
     const reg = (n: string): void => {
         if (seen.has(n)) throw new Error("dup col");
@@ -377,11 +422,44 @@ function decodeLayer02(r: ByteReader): V2Layer {
             reg(colName);
             properties.push(decodeValueProp02(colName, parseColumnValues02(r, data, dCount), bits, featureCount));
         } else {
-            throw new Error("v2 nested unsupported");
+            reg(colName);
+            const parsed = parseNested02(r, colName, bits, data, dCount);
+            if (rawNested !== null) rawNested.push(parsed);
+        }
+    }
+
+    const mValues: V2MValueColumn[] = new Array(mValueCount);
+    const vertexValues: V2MValueColumn[] = [];
+    const triangleValues: V2MValueColumn[] = [];
+    if (hasMValues) {
+        if (r.e - r.p < mValueCount) throw new RangeError("v2 mvals eof");
+        const isMesh = geoLayout === 0x0e;
+        for (let m = 0; m < mValueCount; m++) {
+            const tb = readU8(r);
+            const data = tb & 0x0f;
+            if (data < 2 || data > 11) throw new Error("v2 mval type");
+            let scope: V2MValueScope = "vertex";
+            if (isMesh) {
+                const sb = readU8(r);
+                if (sb === 1) scope = "triangle";
+                else if (sb !== 0) throw new Error("v2 mval scope");
+            }
+            const mName = readStr(r);
+            reg(mName);
+            const bits = readColPresence02(r, tb & 0xf0, sharedBitfields, featureCount);
+            const col = decodeMValue02(mName, scope, bits, parseColumnValues02(r, data, -1), geometry, featureCount);
+            mValues[m] = col;
+            if (scope === "triangle") triangleValues.push(col);
+            else vertexValues.push(col);
         }
     }
 
     if (r.p !== r.e) throw new Error("v2 trailing");
+
+    const nested: V2NestedColumn[] | undefined =
+        rawNested !== null && rawNested.length > 0
+            ? rawNested.map((rn) => decodeNestedColumn(rn, featureCount, nestedJsonMode))
+            : undefined;
 
     return {
         name,
@@ -391,10 +469,20 @@ function decodeLayer02(r: ByteReader): V2Layer {
         geometry,
         ...(ids !== undefined ? { ids } : {}),
         properties,
+        ...(nested !== undefined ? { nested } : {}),
+        vertexValues,
+        triangleValues,
+        mValues,
     };
 }
 
-export function decodeSingleLayer02(bodyBytes: Uint8Array, maxBytes?: number, resetBudgetOnStart = true): V2Layer {
+export function decodeSingleLayer02(
+    bodyBytes: Uint8Array,
+    includeNested = true,
+    nestedJsonMode = false,
+    maxBytes?: number,
+    resetBudgetOnStart = true,
+): V2Layer {
     if (resetBudgetOnStart) resetBudget(maxBytes);
-    return decodeLayer02(cursor(bodyBytes));
+    return decodeLayer02(cursor(bodyBytes), includeNested, nestedJsonMode);
 }

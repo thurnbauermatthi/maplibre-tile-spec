@@ -5,10 +5,11 @@ import {
     decodeRootLengthStream,
 } from "../geometryDecoder";
 import { EMPTY_I32, EMPTY_U32, allocI32, allocU8, allocU32, chargeBytes, checkScratchBytes } from "./binary";
-import type { V2GeometryColumns, V2GeometryLayout } from "./layer";
+import type { HeightMode, V2GeometryColumns, V2GeometryLayout } from "./layer";
 import { decodeRansVertices } from "./rans";
 import {
     LG_RANS,
+    NO_Z,
     type ParsedStream,
     ST_DATA_VERTEX,
     ST_LEN_GEOM,
@@ -28,6 +29,7 @@ export const GEOM_POLYGON = 2;
 export const GEOM_MULTIPOINT = 3;
 export const GEOM_MULTILINESTRING = 4;
 export const GEOM_MULTIPOLYGON = 5;
+export const GEOM_MESH = 6;
 
 const isPolygon = (t: number): boolean => t === GEOM_POLYGON || t === GEOM_MULTIPOLYGON;
 const isLine = (t: number): boolean => t === GEOM_LINESTRING || t === GEOM_MULTILINESTRING;
@@ -187,9 +189,9 @@ export function decodeGeometry02(
     typesStream: ParsedStream | null,
     items: readonly ParsedStream[],
 ): V2GeometryColumns {
+    const isMeshes = uniformType === GEOM_MESH;
     let types: Uint8Array;
     if (uniformType >= 0) {
-        if (uniformType > GEOM_MULTIPOLYGON) throw new Error("geom type");
         types = allocU8(featureCount).fill(uniformType);
     } else {
         if (!typesStream) throw new Error("missing types");
@@ -223,12 +225,19 @@ export function decodeGeometry02(
         else throw new Error("geom st");
     }
 
+    const zStep = vertexStream?.zStep ?? NO_Z;
+    const heightMode = vertexStream?.heightMode ?? 0;
+    if (isMeshes && (zStep === NO_Z || (geoLengths?.length ?? 0) !== types.length)) {
+        throw new Error("mesh geom");
+    }
+
     const indexBuffer = treeSymbols && treeCycles ? decodeTrees(treeSymbols, treeCycles) : undefined;
-    if (indexBuffer !== undefined && partLengths === undefined) {
+    if (!isMeshes && indexBuffer !== undefined && partLengths === undefined) {
         for (let i = 0; i < types.length; i++) if (!isPolygon(types[i])) throw new Error("tess non-poly");
     }
 
     const levels = decodeTopology(types, geoLengths, partLengths, ringLengths);
+    const dimension: 2 | 3 = zStep !== NO_Z ? 3 : 2;
     const hasDict = vertexOffsets !== undefined;
 
     let vertices: Int32Array;
@@ -260,38 +269,57 @@ export function decodeGeometry02(
         if ((triangleOffsets?.[triangleOffsets.length - 1] ?? 0) !== indexBuffer.length / 3) {
             throw new Error("tri count");
         }
-        const vertCount = vertices.length / 2;
+        const rawVertCount = vertices.length / dimension;
         for (let i = 0; i < treeCycles.length; i++) {
-            if (treeCycles[i] >= vertCount) throw new RangeError("tcyc vtx");
+            if (treeCycles[i] >= rawVertCount) throw new RangeError("tcyc vtx");
+        }
+    }
+
+    if (isMeshes) {
+        const runs = levels.geometryOffsets ?? new Uint32Array([0]);
+        const triOff = triangleOffsets ?? new Uint32Array([0]);
+        const indices = indexBuffer ?? EMPTY_U32;
+        if ((runs[runs.length - 1] ?? 0) !== vertices.length / 3 || triOff.length !== runs.length) {
+            throw new Error("mesh len");
+        }
+        for (let f = 0; f < types.length; f++) {
+            const v0 = runs[f];
+            const v1 = runs[f + 1];
+            const lo = triOff[f] * 3;
+            const hi = triOff[f + 1] * 3;
+            if (hi > indices.length) throw new Error("mesh idx");
+            for (let k = lo; k < hi; k++) {
+                if (indices[k] < v0 || indices[k] >= v1) throw new RangeError("mesh oob");
+            }
         }
     }
 
     if (vertexOffsets !== undefined) {
-        const dictCount = vertices.length / 2;
-        const expanded = allocI32(vertexOffsets.length * 2);
+        const dictCount = vertices.length / dimension;
+        const expanded = allocI32(vertexOffsets.length * dimension);
         for (let i = 0; i < vertexOffsets.length; i++) {
             const idx = vertexOffsets[i];
             if (idx >= dictCount) throw new RangeError("vdict");
-            expanded[i * 2] = vertices[idx * 2];
-            expanded[i * 2 + 1] = vertices[idx * 2 + 1];
+            for (let c = 0; c < dimension; c++) expanded[i * dimension + c] = vertices[idx * dimension + c];
         }
         vertices = expanded;
     }
 
-    const layout: V2GeometryLayout =
-        indexBuffer !== undefined
-            ? levels.partOffsets === undefined
-                ? "tessPolygons"
-                : "tessPolygonsWithOutlines"
-            : "outlines";
+    const layout: V2GeometryLayout = isMeshes
+        ? "meshes"
+        : indexBuffer !== undefined
+          ? levels.partOffsets === undefined
+              ? "tessPolygons"
+              : "tessPolygonsWithOutlines"
+          : "outlines";
 
     if (layout === "tessPolygons") {
         if ((triangleOffsets?.length ?? 0) !== types.length + 1) throw new Error("tri len");
-    } else {
+    } else if (!isMeshes) {
         const { geometryOffsets, partOffsets, ringOffsets } = levels;
         const leaf = ringOffsets ?? partOffsets ?? geometryOffsets;
         const expectedVerts = leaf ? leaf[leaf.length - 1] : types.length;
-        if (expectedVerts !== vertices.length / 2) throw new Error("vtx count");
+        if (expectedVerts !== vertices.length / dimension) throw new Error("vtx count");
         let polyCount = 0;
         for (let f = 0; f < types.length; f++) {
             const t = types[f];
@@ -319,15 +347,18 @@ export function decodeGeometry02(
         }
     }
 
+    const hm: HeightMode = heightMode === 1 ? "relativeToGround" : "absolute";
     return {
         types,
         layout,
-        dimension: 2,
+        ...(isMeshes ? { meshes: true as const } : {}),
+        dimension,
         vertices,
         ...(levels.geometryOffsets ? { geometryOffsets: levels.geometryOffsets } : {}),
         ...(levels.partOffsets ? { partOffsets: levels.partOffsets } : {}),
         ...(levels.ringOffsets ? { ringOffsets: levels.ringOffsets } : {}),
         ...(triangleOffsets ? { triangleOffsets } : {}),
         ...(indexBuffer ? { indexBuffer } : {}),
+        ...(zStep !== NO_Z ? { zStep, heightMode: hm } : {}),
     };
 }

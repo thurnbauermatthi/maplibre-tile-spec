@@ -167,6 +167,14 @@ export function chargeExpandedDictStrings(entries: readonly string[], codes: Uin
     chargeBytes(totalChars * 2);
 }
 
+export function expandDenseStrings(sd: DecodedDenseStrings): string[] {
+    if (!isDictDenseStrings(sd)) return sd.values;
+    chargeExpandedDictStrings(sd.entries, sd.codes);
+    const out = allocArray<string>(sd.codes.length);
+    for (let i = 0; i < sd.codes.length; i++) out[i] = sd.entries[sd.codes[i]];
+    return out;
+}
+
 export function materializeStringProperty(
     name: string,
     dense: DecodedDenseStrings,
@@ -217,4 +225,25 @@ export function decodeSharedDictColumns(shared: RawSharedDict, featureCount: num
             !scratch,
         );
     });
+}
+
+export function stringCodesForMValue(dense: DecodedDenseStrings): { codes: Uint32Array; dictionary: string[] } {
+    if (isDictDenseStrings(dense)) {
+        chargeExpandedDictStrings(dense.entries, dense.codes);
+        return { codes: dense.codes, dictionary: dense.entries };
+    }
+    const map = new Map<string, number>();
+    const dictionary: string[] = [];
+    const codes = allocU32(dense.values.length);
+    for (let i = 0; i < dense.values.length; i++) {
+        const s = dense.values[i];
+        let c = map.get(s);
+        if (c === undefined) {
+            c = dictionary.length;
+            dictionary.push(s);
+            map.set(s, c);
+        }
+        codes[i] = c;
+    }
+    return { codes, dictionary };
 }

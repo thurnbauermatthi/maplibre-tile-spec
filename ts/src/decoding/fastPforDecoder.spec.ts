@@ -424,4 +424,27 @@ describe("FastPFOR decoder workspace paths", () => {
         expect(byteContainerI32?.buffer).toBe(workspace.byteContainer.buffer);
         expect(byteContainerI32?.byteOffset).toBe(workspace.byteContainer.byteOffset);
     });
+
+    it("rejects hostile bit-31 alignedLength, 4 GiB byteSize, and oversized exception counts", () => {
+        expect(() => decodeFastPforInt32(new Uint32Array([0x80000000, 0]), 1)).toThrow(/output buffer too small/);
+        // whereMeta = 1 points to word 2 where byteSize = 0xffffffff
+        expect(() => decodeFastPforInt32(new Uint32Array([256, 1, 0xffffffff, 0]), 256)).toThrow(/invalid byteSize/);
+
+        // whereMeta = 1, byteSize = 4 (word 3), bitmap = 2 (k = 2 set), exception count = 0x80000000 (> pageSize)
+        const badExcCount = new Uint32Array([256, 1, 4, 0, 2, 0x80000000]);
+        expect(() => decodeFastPforInt32(badExcCount, 256)).toThrow(/exception count 2147483648 exceeds page value/);
+    });
+
+    it("clears exceptionSizes across reused workspace calls when bitmap is zero", () => {
+        const workspace = createDecoderWorkspace();
+        const withOutliers = createSingleBlockValuesWithExceptionOutliers(DEFAULT_OUTLIER_VALUE);
+        const enc1 = encodeFastPforInt32WithWorkspace(withOutliers, createFastPforEncoderWorkspace());
+        expect(decodeFastPforInt32(enc1, withOutliers.length, workspace)).toEqual(withOutliers);
+
+        // Second stream has no exceptions (bitmap = 0), reusing the same workspace
+        const plain = new Uint32Array(128);
+        for (let i = 0; i < 128; i++) plain[i] = i & 7;
+        const enc2 = encodeFastPforInt32WithWorkspace(plain, createFastPforEncoderWorkspace());
+        expect(decodeFastPforInt32(enc2, plain.length, workspace)).toEqual(plain);
+    });
 });

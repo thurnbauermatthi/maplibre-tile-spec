@@ -10,6 +10,8 @@ export type CoordinatesArray = Array<Array<Point>>;
 export type Geometry = {
     coordinates: CoordinatesArray;
     type: GEOMETRY_TYPE;
+    trianglesOnly?: boolean;
+    ringsPerPolygon?: number[];
 };
 
 export interface MortonSettings {

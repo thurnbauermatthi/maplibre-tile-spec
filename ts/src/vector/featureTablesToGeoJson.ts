@@ -23,8 +23,6 @@ export function featureTablesToFeatureCollection(featureTables: FeatureTable[]):
                     ...Object.fromEntries(Object.entries(feature.properties).map(([k, v]) => [k, safeNumber(v)])),
                 },
             };
-            // Ids are always numeric, so they convert directly rather than through `safeNumber`,
-            // whose nested-value return type GeoJSON's id does not accept.
             if (feature.id !== undefined) {
                 geojsonFeature.id = Number(feature.id);
             }
@@ -34,12 +32,30 @@ export function featureTablesToFeatureCollection(featureTables: FeatureTable[]):
     return { type: "FeatureCollection", features };
 }
 
+function groupRingsByCount(coords: number[][][], counts: number[]): number[][][][] {
+    const polys: number[][][][] = new Array(counts.length);
+    let r = 0;
+    for (let p = 0; p < counts.length; p++) {
+        const count = counts[p];
+        if (count === 0) {
+            polys[p] = coords[r] && coords[r].length === 0 ? [coords[r++]] : [[]];
+        } else {
+            polys[p] = coords.slice(r, r + count);
+            r += count;
+        }
+    }
+    return polys;
+}
+
 /**
  * Converts one decoded geometry to GeoJSON. Multi-polygons need their flat ring list grouped back
- * into polygons, which {@link classifyRings} does from the winding order.
+ * into polygons, which {@link classifyRings} does from the winding order when explicit ring counts
+ * are absent.
  */
 export function getGeometry(geometry: Geometry): GeoJSON.Geometry {
     const coords = geometry.coordinates.map((ring) => ring.map((p) => [p.x, p.y]));
+    if (geometry.trianglesOnly) return { type: "MultiPolygon", coordinates: coords.map((ring) => [ring]) };
+
     switch (geometry.type) {
         case GEOMETRY_TYPE.POINT:
             return { type: "Point", coordinates: coords[0][0] };
@@ -52,19 +68,17 @@ export function getGeometry(geometry: Geometry): GeoJSON.Geometry {
         case GEOMETRY_TYPE.MULTILINESTRING:
             return { type: "MultiLineString", coordinates: coords };
         case GEOMETRY_TYPE.MULTIPOLYGON:
-            return { type: "MultiPolygon", coordinates: classifyRings(coords) };
+            return {
+                type: "MultiPolygon",
+                coordinates: geometry.ringsPerPolygon
+                    ? groupRingsByCount(coords, geometry.ringsPerPolygon)
+                    : classifyRings(coords),
+            };
         default:
             throw new Error(`Unsupported geometry type: ${geometry.type}`);
     }
 }
 
-/**
- * Converts BigInt to Number so the result can be JSON-serialized for comparison.
- *
- * Nested property values are maps and lists of arbitrary depth, and 64-bit integers anywhere inside
- * them decode to BigInt, so the conversion has to recurse. Values too large for a double lose
- * precision here, which `compareWithTolerance` absorbs.
- */
 function safeNumber<T>(val: bigint | T): unknown {
     if (typeof val === "bigint") return Number(val);
     if (Array.isArray(val)) return val.map(safeNumber);

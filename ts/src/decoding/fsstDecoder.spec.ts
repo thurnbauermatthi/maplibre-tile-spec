@@ -77,4 +77,31 @@ describe("decodeFsst", () => {
             expect(encoded.length).toBeLessThan(originalBytes.length);
         });
     });
+
+    describe("malformed input validation", () => {
+        it("rejects symbol length > 8, symbol table overrun, trailing escape, and out-of-range symbol codes", () => {
+            expect(() => decodeFsst(new Uint8Array(9), new Uint32Array([9]), new Uint8Array([0]))).toThrow(RangeError);
+            expect(() => decodeFsst(new Uint8Array(3), new Uint32Array([4]), new Uint8Array([0]))).toThrow(RangeError);
+            expect(() => decodeFsst(new Uint8Array([65]), new Uint32Array([1]), new Uint8Array([255]))).toThrow(
+                RangeError,
+            );
+            expect(() => decodeFsst(new Uint8Array([65]), new Uint32Array([1]), new Uint8Array([0, 255]))).toThrow(
+                RangeError,
+            );
+            expect(() => decodeFsst(new Uint8Array([65]), new Uint32Array([1]), new Uint8Array([1]))).toThrow(
+                RangeError,
+            );
+        });
+
+        it("invokes onAlloc with exact decoded byte length before allocating", () => {
+            const symbols = new Uint8Array([65, 66, 67]);
+            const symbolLengths = new Uint32Array([2, 1]);
+            let charged = -1;
+            const out = decodeFsst(symbols, symbolLengths, new Uint8Array([0, 255, 68, 1]), (bytes) => {
+                charged = bytes;
+            });
+            expect(charged).toBe(4);
+            expect(out).toEqual(new Uint8Array([65, 66, 68, 67]));
+        });
+    });
 });

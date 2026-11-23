@@ -5,6 +5,9 @@ import { decodeStreamMetadata, type RleEncodedStreamMetadata } from "./metadata/
 import { VectorType } from "./vector/vectorType";
 import { Int32FlatVector } from "./vector/flat/int32FlatVector";
 import BitVector from "./vector/flat/bitVector";
+import { BooleanFlatVector } from "./vector/flat/booleanFlatVector";
+import { FloatFlatVector } from "./vector/flat/floatFlatVector";
+import { ObjectFlatVector } from "./vector/flat/objectFlatVector";
 import {
     decodeUnsignedConstInt32Stream,
     decodeUnsignedConstInt64Stream,
@@ -31,11 +34,20 @@ import { decodeEmbeddedTileSetMetadata } from "./metadata/tileset/embeddedTilese
 import { hasStreamCount, isGeometryColumn, isLogicalIdColumn } from "./metadata/tileset/typeMap";
 import type { StreamMetadata } from "./metadata/tile/streamMetadataDecoder";
 import type { GeometryVector } from "./vector/geometry/geometryVector";
-import type Vector from "./vector/vector";
+import { ConstGeometryVector } from "./vector/geometry/constGeometryVector";
+import { FlatGeometryVector } from "./vector/geometry/flatGeometryVector";
+import { createConstGpuVector } from "./vector/geometry/constGpuVector";
+import { createFlatGpuVector } from "./vector/geometry/flatGpuVector";
+import { GEOMETRY_TYPE } from "./vector/geometry/geometryType";
+import type { TopologyVector } from "./vector/geometry/topologyVector";
+import { VertexBufferType } from "./vector/geometry/vertexBufferType";
+import Vector from "./vector/vector";
 import type { GpuVector } from "./vector/geometry/gpuVector";
+import { resetBudget } from "./decoding/v2/binary";
+import { type V2Layer, type V2PropertyColumn, decodeSingleLayer02 } from "./decoding/v2/layer";
 
 /**
- * Decodes a tile with embedded metadata (Tag 0x01 format).
+ * Decodes a tile with embedded metadata (Tag 0x01 and Tag 0x02 formats).
  * This is the primary decoder function for MLT tiles.
  *
  * @param tile The tile data to decode (will be decompressed if gzip-compressed)
@@ -47,6 +59,7 @@ export default function decodeTile(
     geometryScaling?: GeometryScaling,
     idWithinMaxSafeInteger = true,
 ): FeatureTable[] {
+    resetBudget();
     const offset = new IntWrapper(0);
     const featureTables: FeatureTable[] = [];
 
@@ -54,12 +67,21 @@ export default function decodeTile(
         const blockLength = decodeVarintInt32(tile, offset, 1)[0] >>> 0;
         const blockStart = offset.get();
         const blockEnd = blockStart + blockLength;
-        if (blockEnd > tile.length) {
-            throw new Error(`Block overruns tile: ${blockEnd} > ${tile.length}`);
+        if (blockLength === 0 || blockEnd > tile.length) {
+            throw new RangeError(`Block overruns tile or has zero size: ${blockEnd} > ${tile.length}`);
         }
 
         const tag = decodeVarintInt32(tile, offset, 1)[0] >>> 0;
-        if (tag !== 1 && tag !== 2) {
+        if (offset.get() > blockEnd) {
+            throw new RangeError("Layer tag overruns block");
+        }
+        if (tag === 2) {
+            const layer = decodeSingleLayer02(tile.subarray(offset.get(), blockEnd), undefined, false);
+            featureTables.push(v2LayerToFeatureTable(layer, geometryScaling, idWithinMaxSafeInteger));
+            offset.set(blockEnd);
+            continue;
+        }
+        if (tag !== 1) {
             // Skip unknown block types
             offset.set(blockEnd);
             continue;
@@ -161,6 +183,158 @@ export default function decodeTile(
     }
 
     return featureTables;
+}
+
+function identityOffsets(count: number): Uint32Array {
+    const out = new Uint32Array(count + 1);
+    for (let i = 0; i <= count; i++) out[i] = i;
+    return out;
+}
+
+function packBoolBytes(bools: Uint8Array): Uint8Array {
+    const out = new Uint8Array((bools.length + 7) >>> 3);
+    for (let i = 0; i < bools.length; i++) if (bools[i] !== 0) out[i >>> 3] |= 1 << (i & 7);
+    return out;
+}
+
+const utf8Enc = new TextEncoder();
+const pbfString = (s: string): string =>
+    s.charCodeAt(0) === 0xfeff && utf8Enc.encode(s).length >= 12 ? s.slice(1) : s;
+
+class DictStringVector extends Vector<Uint32Array, string> {
+    constructor(
+        name: string,
+        codes: Uint32Array,
+        private readonly dictionary: readonly string[],
+        sizeOrNull: number | BitVector,
+    ) {
+        super(name, codes, sizeOrNull);
+    }
+
+    protected getValueFromBuffer(index: number): string {
+        return pbfString(this.dictionary[this.dataBuffer[index]] ?? "");
+    }
+}
+
+function v2PropertyToVector(col: V2PropertyColumn, numFeatures: number): Vector {
+    const nullability = col.present ? new BitVector(col.present, numFeatures) : undefined;
+    const sizeOrNull = nullability ?? numFeatures;
+    if ("codes" in col) {
+        return new DictStringVector(col.name, col.codes, col.dictionary, sizeOrNull);
+    }
+    switch (col.kind) {
+        case "i32":
+        case "u32":
+            return new Int32FlatVector(col.name, col.values, sizeOrNull);
+        case "i8":
+        case "u8":
+            return new Int32FlatVector(col.name, Int32Array.from(col.values), sizeOrNull);
+        case "i64":
+        case "u64":
+            return new Int64FlatVector(col.name, col.values, sizeOrNull);
+        case "f32":
+            return new FloatFlatVector(col.name, col.values, sizeOrNull);
+        case "f64":
+            return new DoubleFlatVector(col.name, col.values, sizeOrNull);
+        case "bool":
+            return new BooleanFlatVector(col.name, new BitVector(packBoolBytes(col.values), numFeatures), sizeOrNull);
+        case "str":
+            return new ObjectFlatVector(col.name, col.values.map(pbfString), nullability);
+    }
+}
+
+function v2LayerToFeatureTable(
+    layer: V2Layer,
+    geometryScaling: GeometryScaling | undefined,
+    idWithinMaxSafeInteger: boolean,
+): FeatureTable {
+    const numFeatures = layer.featureCount;
+    const geom = layer.geometry;
+    let vertices = geom.vertices;
+
+    if (geometryScaling) {
+        const scale = geometryScaling.extent / layer.extent;
+        geometryScaling.scale = scale;
+        const { min, max } = geometryScaling;
+        const scaled = new Int32Array(vertices.length);
+        for (let i = 0; i < vertices.length; i += 2) {
+            scaled[i] = Math.min(Math.max(Math.round(vertices[i] * scale), min), max);
+            scaled[i + 1] = Math.min(Math.max(Math.round(vertices[i + 1] * scale), min), max);
+        }
+        vertices = scaled;
+    }
+
+    const types32 = Uint32Array.from(geom.types);
+    let isConst = numFeatures > 0;
+    let needsGeomOffsets = false;
+    let needsPartOffsets = geom.ringOffsets !== undefined;
+
+    for (let i = 0; i < numFeatures; i++) {
+        const t = types32[i];
+        if (t !== types32[0]) isConst = false;
+        if (t === GEOMETRY_TYPE.MULTIPOINT || t === GEOMETRY_TYPE.MULTILINESTRING || t === GEOMETRY_TYPE.MULTIPOLYGON) {
+            needsGeomOffsets = true;
+        }
+        if (
+            t === GEOMETRY_TYPE.LINESTRING ||
+            t === GEOMETRY_TYPE.MULTILINESTRING ||
+            t === GEOMETRY_TYPE.POLYGON ||
+            t === GEOMETRY_TYPE.MULTIPOLYGON
+        ) {
+            needsPartOffsets = true;
+        }
+    }
+
+    let topology: TopologyVector | undefined;
+    if (geom.layout !== "tessPolygons") {
+        const geometryOffsets = geom.geometryOffsets ?? (needsGeomOffsets ? identityOffsets(numFeatures) : undefined);
+        const numGeoms = geometryOffsets ? geometryOffsets[numFeatures] : numFeatures;
+        topology = {
+            geometryOffsets,
+            partOffsets: geom.partOffsets ?? (needsPartOffsets ? identityOffsets(numGeoms) : undefined),
+            ringOffsets: geom.ringOffsets,
+        };
+    }
+
+    const geometryVector: GeometryVector | GpuVector =
+        geom.indexBuffer && geom.triangleOffsets
+            ? isConst
+                ? createConstGpuVector(
+                      numFeatures,
+                      types32[0],
+                      geom.triangleOffsets,
+                      geom.indexBuffer,
+                      vertices,
+                      topology,
+                  )
+                : createFlatGpuVector(types32, geom.triangleOffsets, geom.indexBuffer, vertices, topology)
+            : isConst
+              ? new ConstGeometryVector(
+                    numFeatures,
+                    types32[0],
+                    VertexBufferType.VEC_2,
+                    topology ?? {},
+                    undefined,
+                    vertices,
+                )
+              : new FlatGeometryVector(VertexBufferType.VEC_2, types32, topology ?? {}, undefined, vertices);
+
+    let idVector: IdVector | undefined;
+    if (layer.ids) {
+        const nullability = layer.ids.present ? new BitVector(layer.ids.present, numFeatures) : numFeatures;
+        idVector =
+            layer.ids.kind === "u32"
+                ? new Int32FlatVector("_id", layer.ids.values, nullability)
+                : idWithinMaxSafeInteger
+                  ? new DoubleFlatVector("_id", Float64Array.from(layer.ids.values, Number), nullability)
+                  : new Int64FlatVector("_id", layer.ids.values, nullability);
+    }
+
+    const propertyVectors: Vector[] = layer.properties.map((col) => v2PropertyToVector(col, numFeatures));
+    return new FeatureTable(layer.name, geometryVector, idVector, propertyVectors, layer.extent, {
+        version: 2,
+        columnGeometry: geom,
+    });
 }
 
 function decodeIdColumn(

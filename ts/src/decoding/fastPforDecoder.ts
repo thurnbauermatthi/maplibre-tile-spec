@@ -181,9 +181,15 @@ function materializeByteContainer(
  * @param workspace - Decoder workspace used to store the unpacked exception streams.
  * @returns The new input offset (32-bit word index) after consuming all exception streams.
  */
-function unpackExceptionStreams(inValues: Uint32Array, inExcept: number, workspace: FastPforDecoderWorkspace): number {
+function unpackExceptionStreams(
+    inValues: Uint32Array,
+    inExcept: number,
+    workspace: FastPforDecoderWorkspace,
+    maxExceptions: number,
+): number {
     const bitmap = inValues[inExcept++] | 0;
     const dataToBePacked = workspace.dataToBePacked;
+    workspace.exceptionSizes.fill(0);
 
     for (let bitWidth = 2; bitWidth <= MAX_BIT_WIDTH; bitWidth = (bitWidth + 1) | 0) {
         if (((bitmap >>> (bitWidth - 1)) & 1) === 0) continue;
@@ -194,9 +200,14 @@ function unpackExceptionStreams(inValues: Uint32Array, inExcept: number, workspa
             );
         }
         const size = inValues[inExcept++] >>> 0;
+        if (size > maxExceptions) {
+            throw new Error(
+                `FastPFOR decode: exception count ${size} exceeds page value count ${maxExceptions} (bitWidth=${bitWidth})`,
+            );
+        }
         const roundedUp = roundUpToMultipleOf32(size);
 
-        const wordsNeeded = (size * bitWidth + 31) >>> 5;
+        const wordsNeeded = Math.ceil((size * bitWidth) / 32);
         if (inExcept + wordsNeeded > inValues.length) {
             throw new Error(
                 `FastPFOR decode: truncated exception stream (bitWidth=${bitWidth}, size=${size}, streamWordIndex=${inExcept}, needWords=${wordsNeeded}, availableWords=${inValues.length - inExcept}, encodedWords=${inValues.length})`,
@@ -557,7 +568,7 @@ function decodePage(
     const packedEnd = (pageStart + whereMeta) | 0;
 
     const byteSize = inValues[packedEnd] >>> 0;
-    const metaInts = (byteSize + 3) >>> 2;
+    const metaInts = Math.ceil(byteSize / 4);
     const byteContainerStart = packedEnd + 1;
     const bitmapPos = byteContainerStart + metaInts;
 
@@ -570,7 +581,7 @@ function decodePage(
     const byteContainer = materializeByteContainer(inValues, byteContainerStart, byteSize, workspace);
     const byteContainerLen = byteSize;
 
-    const inExcept = unpackExceptionStreams(inValues, bitmapPos, workspace);
+    const inExcept = unpackExceptionStreams(inValues, bitmapPos, workspace, thisSize);
 
     const exceptionPointers = workspace.dataPointers;
     exceptionPointers.fill(0);
@@ -684,15 +695,19 @@ export function decodeFastPforInt32(
     numValues: number,
     workspace?: FastPforDecoderWorkspace,
     blockSize: 256 | 128 = BLOCK_SIZE,
+    out?: Uint32Array,
 ): Uint32Array {
     let inPos = 0;
     let outPos = 0;
-    const decoded = new Uint32Array(numValues);
+    if (out !== undefined && out.length < numValues) {
+        throw new RangeError(`FastPFOR decode: output buffer length ${out.length} < ${numValues}`);
+    }
+    const decoded = out ?? new Uint32Array(numValues);
 
     const decoderWorkspace = workspace ?? createDecoderWorkspace();
 
     if (encoded.length > 0) {
-        const alignedLength = encoded[inPos] | 0;
+        const alignedLength = encoded[inPos] >>> 0;
         inPos = (inPos + 1) | 0;
 
         if ((alignedLength & (blockSize - 1)) !== 0) {

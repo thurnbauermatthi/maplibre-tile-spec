@@ -266,6 +266,9 @@ export function decodeRootLengthStream(
             `Geometry length stream holds ${rootLengthStream.length} values but the types need ${rootLengthCounter}`,
         );
     }
+    if (previousOffset > 0xffffffff) {
+        throw new RangeError("Topology offset overflow");
+    }
 
     return rootBufferOffsets;
 }
@@ -308,6 +311,9 @@ export function decodeLevel1LengthStream(
             `Part length stream holds ${level1LengthBuffer.length} values but the types need ${level1LengthBufferCounter}`,
         );
     }
+    if (previousOffset > 0xffffffff) {
+        throw new RangeError("Topology offset overflow");
+    }
 
     return level1BufferOffsets;
 }
@@ -345,6 +351,9 @@ export function decodeLevel1WithoutRingBufferLengthStream(
         throw new RangeError(
             `Part length stream holds ${level1LengthBuffer.length} values but the types need ${level1LengthCounter}`,
         );
+    }
+    if (previousOffset > 0xffffffff) {
+        throw new RangeError("Topology offset overflow");
     }
 
     return level1BufferOffsets;
@@ -389,6 +398,9 @@ export function decodeLevel2LengthStream(
         throw new RangeError(
             `Ring length stream holds ${level2LengthBuffer.length} values but the parts need ${level2LengthBufferCounter}`,
         );
+    }
+    if (previousOffset > 0xffffffff) {
+        throw new RangeError("Topology offset overflow");
     }
 
     return level2BufferOffsets;

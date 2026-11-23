@@ -21,7 +21,7 @@ export function convertGeometryVector(geometryVector: GeometryVector): Coordinat
     const vertexOffsets = geometryVector.vertexOffsets;
     const nonOffset = !vertexOffsets || vertexOffsets.length === 0;
 
-    const containsPolygon = geometryVector.containsPolygonGeometry();
+    const hasRingOffsets = Boolean(ringOffsets && ringOffsets.length > 0);
     const vertexBuffer = geometryVector.vertexBuffer;
 
     for (let i = 0; i < geometryVector.numGeometries; i++) {
@@ -81,21 +81,20 @@ export function convertGeometryVector(geometryVector: GeometryVector): Coordinat
                         vertexOffsetsOffset += numPoints;
                     }
                     geometries[geometryCounter++] = points.map((point) => [point]);
-                    // MULTIPOINT must increment offset counters like POINT does
-                    partOffsetCounter += numPoints;
-                    ringOffsetsCounter += numPoints;
+                    if (partOffsets) partOffsetCounter += numPoints;
+                    if (ringOffsets) ringOffsetsCounter += numPoints;
                 }
                 break;
             case GEOMETRY_TYPE.LINESTRING:
                 {
                     let numVertices: number;
-                    if (containsPolygon) {
+                    if (hasRingOffsets) {
                         numVertices = ringOffsets[ringOffsetsCounter] - ringOffsets[ringOffsetsCounter - 1];
                         ringOffsetsCounter++;
                     } else {
                         numVertices = partOffsets[partOffsetCounter] - partOffsets[partOffsetCounter - 1];
                     }
-                    partOffsetCounter++;
+                    if (partOffsets) partOffsetCounter++;
 
                     let vertices: Point[];
                     if (nonOffset) {
@@ -123,6 +122,11 @@ export function convertGeometryVector(geometryVector: GeometryVector): Coordinat
                 {
                     const numRings = partOffsets[partOffsetCounter] - partOffsets[partOffsetCounter - 1];
                     partOffsetCounter++;
+                    if (numRings === 0) {
+                        geometries[geometryCounter++] = [[]];
+                        if (geometryOffsets) geometryOffsetsCounter++;
+                        break;
+                    }
                     const rings: CoordinatesArray = new Array(numRings - 1);
                     let shell: Point[];
                     let numVertices = ringOffsets[ringOffsetsCounter] - ringOffsets[ringOffsetsCounter - 1];
@@ -175,13 +179,13 @@ export function convertGeometryVector(geometryVector: GeometryVector): Coordinat
                     const lineStrings: CoordinatesArray = new Array(numLineStrings);
                     for (let j = 0; j < numLineStrings; j++) {
                         let numVertices: number;
-                        if (containsPolygon) {
+                        if (hasRingOffsets) {
                             numVertices = ringOffsets[ringOffsetsCounter] - ringOffsets[ringOffsetsCounter - 1];
                             ringOffsetsCounter++;
                         } else {
                             numVertices = partOffsets[partOffsetCounter] - partOffsets[partOffsetCounter - 1];
                         }
-                        partOffsetCounter++;
+                        if (partOffsets) partOffsetCounter++;
                         if (nonOffset) {
                             lineStrings[j] = getLineStringOrRing(vertexBuffer, vertexBufferOffset, numVertices, false);
                             vertexBufferOffset += numVertices * 2;
@@ -211,6 +215,10 @@ export function convertGeometryVector(geometryVector: GeometryVector): Coordinat
                     for (let j = 0; j < numPolygons; j++) {
                         const numRings = partOffsets[partOffsetCounter] - partOffsets[partOffsetCounter - 1];
                         partOffsetCounter++;
+                        if (numRings === 0) {
+                            polygons[j] = [[]];
+                            continue;
+                        }
                         let shell: Point[];
                         const rings: CoordinatesArray = new Array(numRings - 1);
                         const numVertices = ringOffsets[ringOffsetsCounter] - ringOffsets[ringOffsetsCounter - 1];
@@ -292,6 +300,7 @@ function getLineStringOrRing(
     numVertices: number,
     isRing: boolean,
 ): Point[] {
+    if (numVertices === 0) return [];
     const vertices: Point[] = new Array(isRing ? numVertices + 1 : numVertices);
     for (let i = 0; i < numVertices * 2; i += 2) {
         const x = vertexBuffer[startIndex + i];
@@ -312,6 +321,7 @@ function decodeVec2DictionaryEncodedVertices(
     numVertices: number,
     isRing: boolean,
 ): Point[] {
+    if (numVertices === 0) return [];
     const vertices: Point[] = new Array(isRing ? numVertices + 1 : numVertices);
     for (let i = 0; i < numVertices * 2; i += 2) {
         const offset = vertexOffsets[vertexOffset + i / 2] * 2;
@@ -334,6 +344,7 @@ function decodeMortonDictionaryEncodedVertices(
     isRing: boolean,
     mortonSettings: MortonSettings,
 ): Point[] {
+    if (numVertices === 0) return [];
     const vertices: Point[] = new Array(isRing ? numVertices + 1 : numVertices);
     for (let i = 0; i < numVertices; i++) {
         const offset = vertexOffsets[vertexOffset + i];

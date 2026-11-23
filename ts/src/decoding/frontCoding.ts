@@ -12,7 +12,11 @@ export interface FrontDecoded {
     bytes: Uint8Array;
 }
 
-export function decodeFrontCoded(lengths: Uint32Array, suffixes: Uint8Array): FrontDecoded {
+export function decodeFrontCoded(
+    lengths: Uint32Array,
+    suffixes: Uint8Array,
+    onAlloc?: (bytes: number) => void,
+): FrontDecoded {
     if (lengths.length % 2 !== 0) {
         throw new Error(`Front-coded lengths stream holds ${lengths.length} values, not two per entry`);
     }
@@ -25,27 +29,32 @@ export function decodeFrontCoded(lengths: Uint32Array, suffixes: Uint8Array): Fr
         throw new Error(`Front-coded suffixes take ${total} bytes but the blob holds ${suffixes.length}`);
     }
     let size = 0;
+    let previousLength = 0;
     for (let i = 0; i < count; i++) {
-        size += lengths[i] + lengths[count + i];
+        const shared = lengths[i];
+        if (shared > previousLength) {
+            throw new Error(`Front-coded entry ${i} shares ${shared} bytes with a predecessor of ${previousLength}`);
+        }
+        previousLength = shared + lengths[count + i];
+        size += previousLength;
+        if (size > 0x7fffffff) {
+            throw new RangeError("Front-coded dictionary exceeds maximum byte size");
+        }
     }
+    onAlloc?.(size + (count + 1) * 4);
     const bytes = new Uint8Array(size);
     const offsets = new Uint32Array(count + 1);
     let at = 0;
     let suffixAt = 0;
     let previousStart = 0;
-    let previousLength = 0;
     for (let i = 0; i < count; i++) {
         const shared = lengths[i];
         const suffixLength = lengths[count + i];
-        if (shared > previousLength) {
-            throw new Error(`Front-coded entry ${i} shares ${shared} bytes with a predecessor of ${previousLength}`);
-        }
         bytes.copyWithin(at, previousStart, previousStart + shared);
         bytes.set(suffixes.subarray(suffixAt, suffixAt + suffixLength), at + shared);
         suffixAt += suffixLength;
         previousStart = at;
-        previousLength = shared + suffixLength;
-        at += previousLength;
+        at += shared + suffixLength;
         offsets[i + 1] = at;
     }
     return { offsets, bytes };

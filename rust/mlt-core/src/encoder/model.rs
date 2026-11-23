@@ -451,6 +451,10 @@ pub enum Profile {
     Diffable,
     /// The quickest encode: no triangles, sorts or optional codecs, so tiles come out larger.
     FastEncoding,
+    /// The smallest tiles once served with gzip, brotli or zstd, decoding to exactly the source:
+    /// no triangles, sorts, `FastPFOR`, `FSST`, rANS, bit-packing, second-order deltas, ALP or float
+    /// dictionaries, every competing encoding ranked by deflated size, and under v2 predicted vertices.
+    Compressed,
 }
 
 impl Default for Profile {
@@ -529,6 +533,16 @@ pub struct EncoderConfig {
     /// Allow the v2-only rANS vertex encoding
     #[cfg(feature = "unstable-v2")]
     allow_rans_vertices: bool,
+    /// Allow the v2-only predicted vertex encoding
+    #[cfg(feature = "unstable-v2")]
+    allow_predicted_vertices: bool,
+    /// Store predicted edges in the frame of the edge before them
+    #[cfg(feature = "unstable-v2")]
+    predicted_frames: bool,
+    /// Allow the vertex dictionary layouts (Morton and Hilbert sorted dictionaries with offsets)
+    allow_vertex_dict: bool,
+    /// Rank competing encodings by their deflated size instead of their stored size
+    compressed_selection: bool,
 }
 impl EncoderConfig {
     /// The settings `profile` picks, which the `with_*` methods override.
@@ -536,6 +550,39 @@ impl EncoderConfig {
     pub fn from_profile(profile: Profile) -> Self {
         // Float dictionaries and ALP stay off in every preset while they are still being measured.
         match profile {
+            Profile::Compressed => Self {
+                #[cfg(feature = "unstable-v2")]
+                wire_version: WireVersion::V01,
+                tessellation: Tessellation::Off,
+                attempt_spatial_morton_sort: false,
+                attempt_spatial_hilbert_sort: false,
+                attempt_id_sort: false,
+                allow_fsst: false,
+                allow_fastpfor: false,
+                allow_shared_dict: true,
+                #[cfg(feature = "unstable-v2")]
+                allow_float_dict: false,
+                #[cfg(feature = "unstable-v2")]
+                allow_float_alp: false,
+                #[cfg(feature = "unstable-v2")]
+                allow_row_shapes: false,
+                #[cfg(feature = "unstable-v2")]
+                allow_packed_dict_codes: false,
+                #[cfg(feature = "unstable-v2")]
+                allow_triangles_only: false,
+                #[cfg(feature = "unstable-v2")]
+                allow_delta2: false,
+                #[cfg(feature = "unstable-v2")]
+                allow_rans_vertices: false,
+                #[cfg(feature = "unstable-v2")]
+                allow_predicted_vertices: true,
+                // Frames save about 1.5 points of brotli but cost more decode time than the
+                // bytes they save take to transfer, even at 20 Mbit/s.
+                #[cfg(feature = "unstable-v2")]
+                predicted_frames: false,
+                allow_vertex_dict: true,
+                compressed_selection: true,
+            },
             Profile::Native(network) => Self {
                 #[cfg(feature = "unstable-v2")]
                 wire_version: WireVersion::V01,
@@ -560,6 +607,12 @@ impl EncoderConfig {
                 allow_delta2: false,
                 #[cfg(feature = "unstable-v2")]
                 allow_rans_vertices: false,
+                #[cfg(feature = "unstable-v2")]
+                allow_predicted_vertices: false,
+                #[cfg(feature = "unstable-v2")]
+                predicted_frames: true,
+                allow_vertex_dict: true,
+                compressed_selection: false,
             },
             Profile::Web(network) => Self {
                 #[cfg(feature = "unstable-v2")]
@@ -585,6 +638,12 @@ impl EncoderConfig {
                 allow_delta2: false,
                 #[cfg(feature = "unstable-v2")]
                 allow_rans_vertices: false,
+                #[cfg(feature = "unstable-v2")]
+                allow_predicted_vertices: false,
+                #[cfg(feature = "unstable-v2")]
+                predicted_frames: true,
+                allow_vertex_dict: true,
+                compressed_selection: false,
             },
             Profile::MinSize => Self {
                 #[cfg(feature = "unstable-v2")]
@@ -610,6 +669,12 @@ impl EncoderConfig {
                 allow_delta2: true,
                 #[cfg(feature = "unstable-v2")]
                 allow_rans_vertices: true,
+                #[cfg(feature = "unstable-v2")]
+                allow_predicted_vertices: false,
+                #[cfg(feature = "unstable-v2")]
+                predicted_frames: true,
+                allow_vertex_dict: true,
+                compressed_selection: false,
             },
             Profile::Diffable => Self {
                 #[cfg(feature = "unstable-v2")]
@@ -635,6 +700,12 @@ impl EncoderConfig {
                 allow_delta2: true,
                 #[cfg(feature = "unstable-v2")]
                 allow_rans_vertices: false,
+                #[cfg(feature = "unstable-v2")]
+                allow_predicted_vertices: false,
+                #[cfg(feature = "unstable-v2")]
+                predicted_frames: true,
+                allow_vertex_dict: true,
+                compressed_selection: false,
             },
             Profile::FastEncoding => Self {
                 #[cfg(feature = "unstable-v2")]
@@ -660,6 +731,12 @@ impl EncoderConfig {
                 allow_delta2: false,
                 #[cfg(feature = "unstable-v2")]
                 allow_rans_vertices: false,
+                #[cfg(feature = "unstable-v2")]
+                allow_predicted_vertices: false,
+                #[cfg(feature = "unstable-v2")]
+                predicted_frames: true,
+                allow_vertex_dict: true,
+                compressed_selection: false,
             },
         }
     }
@@ -880,6 +957,66 @@ impl EncoderConfig {
     #[must_use]
     pub fn with_rans_vertices(mut self, enabled: bool) -> Self {
         self.allow_rans_vertices = enabled;
+        self
+    }
+
+    /// Whether vertex streams may be predicted from the layer's topology, which only v2 can express.
+    #[cfg(feature = "unstable-v2")]
+    #[must_use]
+    pub fn allow_predicted_vertices(self) -> bool {
+        self.allow_predicted_vertices && self.wire_version != WireVersion::V01
+    }
+
+    /// Allow plain vertex streams to store each vertex as what a guess from the vertices before it
+    /// misses, or as a copy of earlier vertices.
+    #[cfg(feature = "unstable-v2")]
+    #[must_use]
+    pub fn with_predicted_vertices(mut self, enabled: bool) -> Self {
+        self.allow_predicted_vertices = enabled;
+        self
+    }
+
+    /// Whether predicted vertices store each edge in the frame of the edge before it.
+    #[cfg(feature = "unstable-v2")]
+    #[must_use]
+    pub fn predicted_frames(self) -> bool {
+        self.predicted_frames
+    }
+
+    /// Store predicted edges in the frame of the edge before them (the default), which makes
+    /// tiles smaller and roughly doubles the decoder's time per predicted vertex.
+    #[cfg(feature = "unstable-v2")]
+    #[must_use]
+    pub fn with_predicted_frames(mut self, enabled: bool) -> Self {
+        self.predicted_frames = enabled;
+        self
+    }
+
+    /// Whether the vertex dictionary layouts may compete with plain vertex streams.
+    #[must_use]
+    pub fn allow_vertex_dict(self) -> bool {
+        self.allow_vertex_dict
+    }
+
+    /// Allow the Morton and Hilbert vertex dictionary layouts.
+    #[must_use]
+    pub fn with_vertex_dict(mut self, enabled: bool) -> Self {
+        self.allow_vertex_dict = enabled;
+        self
+    }
+
+    /// Whether competing encodings are ranked by their deflated size.
+    /// Without the `compressed-selection` feature they are always ranked by stored size.
+    #[must_use]
+    pub fn compressed_selection(self) -> bool {
+        self.compressed_selection && cfg!(feature = "compressed-selection")
+    }
+
+    /// Rank competing encodings by the size they deflate to, as a proxy for the size a tile
+    /// takes after the HTTP compression it is served with, instead of by their stored size.
+    #[must_use]
+    pub fn with_compressed_selection(mut self, enabled: bool) -> Self {
+        self.compressed_selection = enabled;
         self
     }
 }

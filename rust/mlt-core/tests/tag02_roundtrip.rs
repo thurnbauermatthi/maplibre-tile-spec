@@ -2146,3 +2146,86 @@ mod rans_vertices {
         );
     }
 }
+
+mod predicted_vertices {
+    use mlt_core::test_helpers::stream_logicals;
+    use mlt_core::wire::{DictionaryType, LogicalEncoding, StreamType, VertexLogical};
+
+    use super::*;
+
+    fn cfg_predicted() -> EncoderConfig {
+        cfg_v2()
+            .with_predicted_vertices(true)
+            .with_vertex_dict(false)
+    }
+
+    fn vertex_logicals(bytes: &[u8]) -> Vec<LogicalEncoding> {
+        stream_logicals(bytes, StreamType::Data(DictionaryType::Vertex))
+    }
+
+    /// Pairs of polygons whose second walks the border of the first backwards, as
+    /// neighbouring land-use polygons do, so half the vertices repeat earlier ones.
+    fn block() -> Vec<Geometry<i32>> {
+        (0..40)
+            .flat_map(|i| {
+                let border: Vec<(i32, i32)> = (0..16)
+                    .map(|k| (i * 60 + k * 7 + (k * k) % 13, i * 20 + k * 3 - (k * 5) % 11))
+                    .collect();
+                let mut back = border.clone();
+                back.reverse();
+                [border, back].map(|r| Geometry::Polygon(Polygon::new(ring(&r), vec![])))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn shared_borders_are_predicted_and_decode_unchanged() {
+        let l = layer(block(), None, &[]);
+        let predicted = l.encode(cfg_predicted()).unwrap();
+        assert_eq!(
+            vertex_logicals(&predicted),
+            [LogicalEncoding::Vertex(VertexLogical::Predicted)]
+        );
+        let plain = l
+            .encode(cfg_predicted().with_predicted_vertices(false))
+            .unwrap();
+        assert!(
+            predicted.len() < plain.len(),
+            "{} vs {}",
+            predicted.len(),
+            plain.len()
+        );
+        assert_eq!(decode(&predicted).1, decode(&plain).1);
+        assert_dump_covers(&predicted);
+    }
+
+    #[rstest]
+    fn a_tessellated_layer_predicts_only_with_outlines(
+        #[values(false, true)] triangles_only: bool,
+    ) {
+        let l = layer(block(), None, &[]);
+        let cfg = cfg_predicted()
+            .with_tessellation(Tessellation::Always)
+            .with_triangles_only(triangles_only);
+        let bytes = l.encode(cfg).unwrap();
+        let expected = if triangles_only {
+            VertexLogical::ComponentwiseDelta
+        } else {
+            VertexLogical::Predicted
+        };
+        assert_eq!(vertex_logicals(&bytes), [LogicalEncoding::Vertex(expected)]);
+        assert_eq!(
+            decode(&bytes).1,
+            decode(&l.encode(cfg.with_predicted_vertices(false)).unwrap()).1
+        );
+    }
+
+    #[test]
+    fn v1_ignores_predicted_vertices() {
+        let l = layer(block(), None, &[]);
+        assert_eq!(
+            l.encode(cfg_v1().with_predicted_vertices(true)).unwrap(),
+            l.encode(cfg_v1()).unwrap()
+        );
+    }
+}

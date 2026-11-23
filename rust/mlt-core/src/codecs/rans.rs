@@ -702,6 +702,11 @@ pub fn decode_vertices(
     num_values: u32,
     dec: &mut Decoder,
 ) -> MltResult<Vec<i32>> {
+    if !cfg!(feature = "rans") {
+        return Err(crate::MltError::NotImplemented(
+            "rANS decoding, which this build leaves out",
+        ));
+    }
     if !num_values.is_multiple_of(2) {
         return Err(MalformedRans("odd vertex word count"));
     }

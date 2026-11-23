@@ -266,6 +266,9 @@ pub enum VertexLogical {
     MortonDelta(Morton),
     /// rANS over componentwise deltas, coded per run of the layer's topology.
     Rans,
+    /// Each vertex guessed from the ones before it per the layer's topology, or copied from
+    /// earlier ones, with the residuals in byte planes per kind of vertex.
+    Predicted,
     /// Interleaved `(x, y, z)` triples, whose z lie on the grid of the step.
     #[cfg(feature = "unstable-v2")]
     Xyz(ZStep, XyzLogical),
@@ -280,7 +283,8 @@ impl VertexLogical {
             | Self::Delta
             | Self::ComponentwiseDelta
             | Self::ComponentwiseDelta2
-            | Self::Rans => 2,
+            | Self::Rans
+            | Self::Predicted => 2,
             Self::MortonDelta(_) => 1,
             #[cfg(feature = "unstable-v2")]
             Self::Xyz(..) => 3,
@@ -632,6 +636,7 @@ impl Display for LogicalEncoding {
                     VertexLogical::ComponentwiseDelta2 => "componentwise-delta2",
                     VertexLogical::MortonDelta(_) => "morton-delta",
                     VertexLogical::Rans => "rans",
+                    VertexLogical::Predicted => "predicted",
                     #[cfg(feature = "unstable-v2")]
                     VertexLogical::Xyz(_, XyzLogical::None) => "xyz-none",
                     #[cfg(feature = "unstable-v2")]

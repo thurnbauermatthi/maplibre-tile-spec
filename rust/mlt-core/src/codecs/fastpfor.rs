@@ -22,6 +22,11 @@ pub fn decode_fastpfor(
     kind: FastPForKind,
     dec: &mut Decoder,
 ) -> MltResult<Vec<u32>> {
+    if !cfg!(feature = "fastpfor") {
+        return Err(MltError::NotImplemented(
+            "FastPFOR decoding, which this build leaves out",
+        ));
+    }
     if num_values == 0 {
         // FIXME: eventually there should not be a header anywhere at all
         return if data.is_empty() {

@@ -51,6 +51,11 @@ pub(crate) fn pack<T: Copy + Into<u64>>(values: &[T], width: u32, out: &mut Vec<
 
 /// Read `count` values back out of a packed payload.
 pub fn unpack<T: PhysicalWord>(data: &[u8], count: u32) -> MltResult<Vec<T>> {
+    if !cfg!(feature = "bitpack") {
+        return Err(crate::MltError::NotImplemented(
+            "bit-packed decoding, which this build leaves out",
+        ));
+    }
     #[expect(
         clippy::unnecessary_lazy_evaluations,
         reason = "an eager error is dropped on every success"

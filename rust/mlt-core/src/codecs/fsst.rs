@@ -30,6 +30,11 @@ pub fn decode_fsst_bytes(
     raw: RawFsstData<'_>,
     dec: &mut Decoder,
 ) -> MltResult<(Vec<u8>, Vec<u32>)> {
+    if !cfg!(feature = "fsst") {
+        return Err(MltError::NotImplemented(
+            "FSST decoding, which this build leaves out",
+        ));
+    }
     let RawFsstData {
         symbol_lengths,
         symbol_table,

@@ -1232,3 +1232,163 @@ An encoder SHOULD pick the depth and precisions that make the stream shortest, a
               00 00 01 00                            lane 3: 0x00010000
     raw bits: 04 69                                  15 bits: 4, 8, 1, 2, 1, padded
     ```
+
+### Predicted <span class="experimental"></span> {#predicted}
+
+Predicted vertices store each vertex of a plain layout's vertex stream as what a guess from the vertices decoded before it misses, or as a copy of vertices decoded before it.
+A `VertexDict` stream MUST NOT use it, and neither may an [`(x, y, z)`](specification/v2.md#z-coordinates) stream.
+
+Unlike [rANS](#rans), it does no entropy coding of its own.
+Its residuals are bytes, grouped by the kind of vertex they belong to, so that the gzip, brotli or zstd a tile is served with sees homogeneous byte-aligned symbols.
+Every step is integer arithmetic, so every platform decodes the same bits.
+
+The guesses follow the shape of map geometry:
+
+- a ring or line starts near where the previous ring or line started, or, with starts from ends, where the previous run ended, which fits road networks stored as chained segments,
+- the fourth vertex of a four-vertex ring completes a parallelogram,
+- with frames, every later edge is stored in the frame of the edge before it, so the corner of a building or the bend of a road leaves one component near zero.
+
+Neighbouring polygons share borders and roads share junctions, so a stretch of vertices an earlier ring or line already holds is stored as a copy of it, forwards or backwards.
+
+#### Runs and Classes {#predicted-runs}
+
+The runs are those of [rANS](#rans-runs): one per ring, else per part, else per geometry, from the deepest offset level of the geometry section.
+Each run takes its kind from the geometry type of the feature that owns it:
+
+| Feature type | Run kind |
+|---|---|
+| `Point`, `MultiPoint` | Point |
+| `LineString`, `MultiLineString` | Line |
+| `Polygon`, `MultiPolygon` | Ring |
+
+A layer with none of the three offset levels has one Point run per vertex, and every feature MUST then be a `Point` or `MultiPoint` with one vertex each.
+The runs MUST cover exactly the stream's `num_values` vertices, and every run MUST be owned by a feature.
+Because the runs come from the topology, the stream is decoded after the topology streams.
+
+Vertex `i` of a run of length `len` belongs to one of six classes:
+
+| Code | Class | Vertices | Guess |
+|---:|---|---|---|
+| `0` | Start | `i = 0` of a Line or Ring run | the first vertex of the previous Line or Ring run, `(0, 0)` before the first; with starts from ends, the last vertex of the previous run of any kind, `(0, 0)` before the first |
+| `1` | Point | every vertex of a Point run | the vertex before it in the stream, `(0, 0)` before the first |
+| `2` | Ring | `i ≥ 1` of a Ring run, except a Corner | the vertex before it, in the frame of the edge before it when `i ≥ 2` and frames are on |
+| `3` | Corner | `i = 3` of a Ring run with `len = 4` | `v[0] + v[2] - v[1]`, the parallelogram |
+| `4` | Line1 | `i = 1` of a Line run | the vertex before it |
+| `5` | Line | `i ≥ 2` of a Line run | the vertex before it, in the frame of the edge before it when frames are on |
+
+The residual is the vertex minus its guess.
+For the classes guessed in a frame, the residual is the difference `d = v[i] - v[i - 1]` turned by the frame of the edge `u = v[i - 1] - v[i - 2]`.
+Coordinates and residuals are computed in at least 64-bit signed integers, and a decoded coordinate outside the 32-bit signed range MUST be rejected.
+
+#### Frames {#predicted-frames}
+
+The frame of an edge `u = (a0, b0) ≠ (0, 0)` is an exact integer rotation that turns `u` to within 0.71 degrees of the positive x axis.
+An edge of length zero has no frame, and a residual measured in it is `d` itself.
+
+The frame is a number `q` of clockwise quarter turns, then a turn by one of 128 directions built from three fixed-point shears.
+Shears map integers to integers and are undone exactly whatever their constants, so the rotation is lossless.
+All products stay below `2^53`, so a JavaScript `Number` holds them exactly.
+
+```
+turn(q, (x, y)) = (x, y), (y, -x), (-x, -y), (-y, x)   for q = 0, 1, 2, 3
+shear(k, v)     = floor((k * v + 2^15) / 2^16)         an arithmetic shift
+
+q      = if |b0| > |a0|: (1 if b0 > 0 else 3) else (0 if a0 > 0 else 2)
+(a, b) = turn(q, u)
+k      = number of THRESHOLDS[j] with |b| * 2^16 >= a * THRESHOLDS[j]
+sign   = -1 if b < 0 else 1
+t      = sign * TAN_HALF[k]
+s      = sign * SIN[k]
+
+forward(d):  (x, y) = turn(q, d); x1 = x + shear(t, y); y2 = y - shear(s, x1); return (x1 + shear(t, y2), y2)
+inverse(r):  (x3, y2) = r; x1 = x3 - shear(t, y2); y = y2 + shear(s, x1); return turn((4 - q) mod 4, (x1 - shear(t, y), y))
+```
+
+The constants are fixed tables, so they need not be computed with floating point:
+
+| Table | Values (`j` or `k` from `0`) | Defined as |
+|---|---|---|
+| `THRESHOLDS` | `1609, 4834, 8083, 11372, 14717, 18136, 21650, 25280, 29050, 32988, 37126, 41500, 46156, 51145, 56532, 62395` | `round(tan((j + 1/2) * pi / 64) * 2^16)` |
+| `TAN_HALF` | `0, 1609, 3220, 4834, 6455, 8083, 9721, 11372, 13036, 14717, 16416, 18136, 19880, 21650, 23449, 25280, 27146` | `round(tan(k * pi / 128) * 2^16)` |
+| `SIN` | `0, 3216, 6424, 9616, 12785, 15924, 19024, 22078, 25080, 28020, 30893, 33692, 36410, 39040, 41576, 44011, 46341` | `round(sin(k * pi / 64) * 2^16)` |
+
+The encoder stores `forward(d)`, and the decoder rebuilds `d` as `inverse(residual)`.
+
+#### Copies {#predicted-copies}
+
+A copy writes `n ≥ 2` vertices of a Line or Ring run by reading earlier vertices of one source run, starting `distance` vertices back from the vertex being written.
+It reads forwards or backwards.
+On a closed source ring that is already complete, reading wraps from its last vertex to its first, or backwards from its first to its last.
+A copy never leaves its source run, never reads a vertex not yet written, and never extends past the end of the run being written.
+Point runs never copy.
+
+#### Payload {#predicted-payload}
+
+```
+payload := [u8 flags]
+           [varint ops_length] [ops]        only when flags bit 0 is set
+           residual_block * 6               classes 0 to 5, in code order
+
+flags          bit 0: an ops block follows, bit 1: frames are on, bit 2: starts from ends,
+               bits 3-7 MUST be 0
+ops            per Line or Ring run, in stream order, also for a run of length 0:
+                 [varint copy_count]
+                 copy_count * ([varint gap] [varint (distance << 1) | backwards] [varint n - 2])
+residual_block := [varint block_length] [varint low_length] [u8 low[low_length]] [high]
+```
+
+`gap` is the number of vertices the run guesses before this copy, counted from the run's start or the end of its previous copy.
+`block_length` counts the `low_length` varint, the low plane and the high plane.
+
+A class's residuals are its `(x, y)` residual pairs in vertex order, `x` first, each [ZigZag](#zigzag)-encoded as a 64-bit value `z`.
+Each `z` below `255` is one byte of the low plane.
+A larger `z` is the byte `255` in the low plane and the canonical varint of `z - 255` in the high plane, in the same order.
+
+A decoder MUST reject reserved flag bits, a copy that breaks the rules above, a class whose residuals run out or are left over, ops or high-plane bytes left over, and bytes after the last block.
+
+```
+prev = prev_start = (0, 0)
+for each run (len, kind):
+    copies = read copy_count, if bit 0 is set and kind is not Point
+    for i in 0..len:
+        if a copy starts at i: write its n vertices, i += n, continue
+        c = class of vertex i
+        r = next residual pair of class c
+        v[i] = prev + r                         Point, i = 0
+             = prev_start + r                   Start, bit 2 clear
+             = prev + r                         Start, bit 2 set
+             = v[0] + v[2] - v[1] + r           Corner
+             = v[i-1] + inverse_u(r)            Ring or Line in a frame, u = v[i-1] - v[i-2]
+             = v[i-1] + r                       otherwise
+    if len > 0:
+        prev_start = v[0], unless kind is Point
+        prev = v[len - 1]
+```
+
+An encoder SHOULD compare predicted vertices with componentwise delta and the vertex dictionary by the size they take after the transport compression the tile is served with, and SHOULD leave frames off for clients that decode in JavaScript or WebAssembly, where they roughly double the decode time per vertex for 1 to 1.5 % of brotli size.
+It SHOULD try both start guesses the same way.
+Starts from ends pay off when each line begins where the one before it ended, as when an encoder that may reorder the parts of a `MultiLineString` walks a road network stored as segments through their shared endpoints: on the Bing Maps tiles of the evaluation, about a sixth of the brotli size of the line residuals.
+
+!!! example
+
+    A square ring `(10, 10), (20, 10), (20, 20), (10, 20)`, then a line `(0, 0), (5, 0), (10, 1)`, frames off:
+
+    | Vertex | Class | Guess | Residual | ZigZag |
+    |---|---|---|---|---|
+    | `(10, 10)` | Start | `(0, 0)` | `(10, 10)` | `20, 20` |
+    | `(20, 10)` | Ring | `(10, 10)` | `(10, 0)` | `20, 0` |
+    | `(20, 20)` | Ring | `(20, 10)` | `(0, 10)` | `0, 20` |
+    | `(10, 20)` | Corner | `(10, 10) + (20, 20) - (20, 10)` | `(0, 0)` | `0, 0` |
+    | `(0, 0)` | Start | `(10, 10)` | `(-10, -10)` | `19, 19` |
+    | `(5, 0)` | Line1 | `(0, 0)` | `(5, 0)` | `10, 0` |
+    | `(10, 1)` | Line | `(5, 0)` | `(5, 1)` | `10, 2` |
+
+    ```
+    flags:   00                   no copies, no frames
+    Start:   05 04 14 14 13 13
+    Point:   01 00
+    Ring:    05 04 14 00 00 14
+    Corner:  03 02 00 00
+    Line1:   03 02 0A 00
+    Line:    03 02 0A 02
+    ```

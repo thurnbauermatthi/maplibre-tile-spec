@@ -326,6 +326,12 @@ pub(crate) fn write_stream_meta<W: io::Write>(
                 "v1, which has no rANS vertex coding",
             ));
         }
+        LE::Vertex(VL::Predicted) => {
+            return Err(UnsupportedLogicalEncoding(
+                meta.encoding.logical,
+                "v1, which has no predicted vertex coding",
+            ));
+        }
         LE::Bool(BL::Runs | BL::Sparse) => {
             return Err(UnsupportedLogicalEncoding(
                 meta.encoding.logical,
@@ -380,7 +386,7 @@ pub(crate) fn write_stream_meta<W: io::Write>(
         // Rejected before the header is written.
         #[cfg(feature = "unstable-v2")]
         LE::Vertex(VL::Xyz(..)) => {}
-        LE::Int(IL::Delta2) | LE::Vertex(VL::ComponentwiseDelta2 | VL::Rans) => {}
+        LE::Int(IL::Delta2) | LE::Vertex(VL::ComponentwiseDelta2 | VL::Rans | VL::Predicted) => {}
         LE::Bool(BL::Runs | BL::Sparse) => {}
     }
     Ok(())

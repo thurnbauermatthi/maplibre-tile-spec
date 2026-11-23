@@ -187,6 +187,9 @@ enum Profile {
     /// The quickest encode: no triangles, sorts, `FSST`, `FastPFOR` or shared dictionaries, so tiles come out larger
     #[value(name = "fast_encoding", alias = "fast-encoding")]
     FastEncoding,
+    /// The smallest tiles after gzip, brotli or zstd, decoding to exactly the source: no triangles or sorts,
+    /// `--no-fastpfor --no-fsst --no-bitpacking --no-alp --no-float-dict`, every choice ranked by deflated size, and under MLT version 2 predicted vertices
+    Compressed,
 }
 
 /// How tiles reach the client, which prices a stored byte against the client earcut it spares.
@@ -437,6 +440,7 @@ impl ConvertArgs {
             Some(Profile::MinSize) => CoreProfile::MinSize,
             Some(Profile::Diffable) => CoreProfile::Diffable,
             Some(Profile::FastEncoding) => CoreProfile::FastEncoding,
+            Some(Profile::Compressed) => CoreProfile::Compressed,
         };
         let mut encoder =
             EncoderConfig::from_profile(profile).with_wire_version(self.mlt_version.into());
@@ -478,10 +482,13 @@ impl ConvertArgs {
         if v2.rans_vertices {
             encoder = encoder.with_rans_vertices(true);
         }
+        // The compressed profile leaves bit-packing off, since it loses bytes after compression,
+        // and ALP and float dictionaries off, since they save nothing there.
+        let compressed = self.profile == Some(Profile::Compressed);
         Ok(encoder
-            .with_float_alp(!v2.no_alp)
-            .with_float_dict(!v2.no_float_dict)
-            .with_packed_dict_codes(!v2.no_bitpacking)
+            .with_float_alp(!v2.no_alp && !compressed)
+            .with_float_dict(!v2.no_float_dict && !compressed)
+            .with_packed_dict_codes(!v2.no_bitpacking && !compressed)
             .with_triangles_only(v2.triangles_only))
     }
 }

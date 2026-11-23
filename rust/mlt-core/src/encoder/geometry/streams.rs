@@ -483,6 +483,26 @@ pub(super) fn encode_rans_vertex_stream02(
     write_stream_payload(enc, meta, false, &payload)
 }
 
+/// The plain vertex layout as predicted vertices over the layer's vertex `runs`, each ring or line
+/// guessed to start near the start or `from_end` the end of the run before it.
+#[cfg(feature = "unstable-v2")]
+pub(super) fn encode_predicted_vertex_stream02(
+    vertices: &[i32],
+    runs: &[crate::codecs::predicted::Run],
+    from_end: bool,
+    enc: &mut Encoder,
+) -> MltResult<()> {
+    let payload =
+        crate::codecs::predicted::encode(vertices, runs, enc.config().predicted_frames(), from_end);
+    let meta = StreamMeta::new2(
+        StreamType::Data(DictionaryType::Vertex),
+        LogicalEncoding::Vertex(VertexLogical::Predicted),
+        PhysicalEncoding::None,
+        vertices.len(),
+    )?;
+    write_stream_payload(enc, meta, false, &payload)
+}
+
 fn vec2_vertex_stream(
     vertices: &[i32],
     enc: &mut Encoder,

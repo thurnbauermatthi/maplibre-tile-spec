@@ -317,6 +317,9 @@ pub enum MltError {
     #[error("rANS vertex stream is malformed: {0}")]
     MalformedRans(&'static str),
     #[cfg(feature = "unstable-v2")]
+    #[error("predicted vertex stream is malformed: {0}")]
+    MalformedPredicted(&'static str),
+    #[cfg(feature = "unstable-v2")]
     #[error("triangle trees are malformed: {0}")]
     MalformedTriangles(&'static str),
     #[cfg(feature = "unstable-v2")]

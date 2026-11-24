@@ -15,11 +15,13 @@
   ],
   "scripts": {
     "build": "tsc",
+    "build:viewer": "tsc && rolldown dist/index.js --file dist/viewer-bundle.js --format esm --platform browser",
     "bench": "vitest bench --run src",
     "test": "vitest run --coverage",
     "lint": "eslint",
     "format": "biome format --write ./src",
-    "format:check": "biome format ./src"
+    "format:check": "biome format ./src",
+    "serve": "node viewer/serve.js"
   },
   "repository": {
     "type": "git",

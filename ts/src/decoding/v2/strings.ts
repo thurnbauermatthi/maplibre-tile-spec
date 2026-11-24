@@ -1,7 +1,7 @@
+import type { MltStringPropertyColumn } from "../../columns";
 import { decodeFrontCoded } from "../frontCoding";
 import { decodeFsst } from "../fsstDecoder";
 import { type ByteReader, allocArray, allocU32, chargeBytes, decodeUtf8 } from "./binary";
-import type { V2StringPropertyColumn } from "./layer";
 import { bitmapPopcount, normalizePresentBitmap, scatterPresent } from "./presence";
 import {
     FM_BYTES,
@@ -181,7 +181,7 @@ export function materializeStringProperty(
     presenceBits: Uint8Array | undefined,
     featureCount: number,
     denseCodesOwned = false,
-): V2StringPropertyColumn {
+): MltStringPropertyColumn {
     const denseLen = isDictDenseStrings(dense) ? dense.codes.length : dense.values.length;
     const pop = presenceBits === undefined ? featureCount : bitmapPopcount(presenceBits, featureCount);
     if (pop !== denseLen) throw new Error("str count");
@@ -207,7 +207,7 @@ export function materializeStringProperty(
     return { name, kind: "str", present, values };
 }
 
-export function decodeSharedDictColumns(shared: RawSharedDict, featureCount: number): V2StringPropertyColumn[] {
+export function decodeSharedDictColumns(shared: RawSharedDict, featureCount: number): MltStringPropertyColumn[] {
     const blob =
         "data" in shared
             ? shared.data.d

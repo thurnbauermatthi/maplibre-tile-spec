@@ -1,3 +1,4 @@
+import type { MltColumnLayer, MltGeometryLayout, MltIdColumn, MltPropertyColumn } from "./columns";
 import FeatureTable from "./vector/featureTable";
 import { type Column, ScalarType } from "./metadata/tileset/tilesetMetadata";
 import IntWrapper from "./decoding/intWrapper";
@@ -42,9 +43,20 @@ import { GEOMETRY_TYPE } from "./vector/geometry/geometryType";
 import type { TopologyVector } from "./vector/geometry/topologyVector";
 import { VertexBufferType } from "./vector/geometry/vertexBufferType";
 import Vector from "./vector/vector";
-import type { GpuVector } from "./vector/geometry/gpuVector";
-import { resetBudget } from "./decoding/v2/binary";
-import { type V2Layer, type V2PropertyColumn, decodeSingleLayer02 } from "./decoding/v2/layer";
+import { GpuVector } from "./vector/geometry/gpuVector";
+import {
+    allocF32,
+    allocF64,
+    allocI32,
+    allocI64,
+    allocU8,
+    allocU32,
+    allocU64,
+    chargeBytes,
+    resetBudget,
+} from "./decoding/v2/binary";
+import { vertexIndexAt } from "./decoding/v2/geometry";
+import { decodeSingleLayer02 } from "./decoding/v2/layer";
 
 /**
  * Decodes a tile with embedded metadata (Tag 0x01 and Tag 0x02 formats).
@@ -60,6 +72,15 @@ export default function decodeTile(
     idWithinMaxSafeInteger = true,
 ): FeatureTable[] {
     resetBudget();
+    return decodeTileInternal(tile, geometryScaling, idWithinMaxSafeInteger);
+}
+
+function decodeTileInternal(
+    tile: Uint8Array,
+    geometryScaling?: GeometryScaling,
+    idWithinMaxSafeInteger = true,
+    unsignedCols?: Set<string>,
+): FeatureTable[] {
     const offset = new IntWrapper(0);
     const featureTables: FeatureTable[] = [];
 
@@ -144,6 +165,10 @@ export default function decodeTile(
 
                 geometryVector = decodeGeometryColumn(tile, numStreams, offset, numFeatures, geometryScaling);
             } else {
+                const pt = columnMetadata.scalarType?.physicalType;
+                if (unsignedCols && (pt === ScalarType.UINT_32 || pt === ScalarType.UINT_64)) {
+                    unsignedCols.add(columnName);
+                }
                 const columnHasStreamCount = hasStreamCount(columnMetadata);
                 const numStreams = columnHasStreamCount ? decodeVarintInt32(tile, offset, 1)[0] : 1;
 
@@ -185,6 +210,161 @@ export default function decodeTile(
     return featureTables;
 }
 
+export function decodeV1LayerAsColumns(tile: Uint8Array, bodyStart: number, bodyEnd: number): MltColumnLayer {
+    const bodyLen = bodyEnd - bodyStart;
+    const hdr: number[] = [];
+    let rem = bodyLen + 1;
+    while (rem >= 0x80) {
+        hdr.push((rem & 0x7f) | 0x80);
+        rem >>>= 7;
+    }
+    hdr.push(rem, 1);
+    const block = new Uint8Array(hdr.length + bodyLen);
+    block.set(hdr, 0);
+    block.set(tile.subarray(bodyStart, bodyEnd), hdr.length);
+
+    const unsignedCols = new Set<string>();
+    const table = decodeTileInternal(block, undefined, false, unsignedCols)[0];
+    const n = table.numFeatures;
+    const gv = table.geometryVector;
+    const types = allocU8(n);
+    for (let i = 0; i < n; i++) types[i] = gv.geometryType(i);
+
+    let vertices: Int32Array;
+    let triangleOffsets: Uint32Array | undefined;
+    let indexBuffer: Uint32Array | undefined;
+    let layout: MltGeometryLayout = "outlines";
+    const top = gv.topologyVector;
+
+    if (gv instanceof GpuVector) {
+        vertices = allocI32(gv.vertexBuffer.length);
+        vertices.set(gv.vertexBuffer);
+        triangleOffsets = gv.triangleOffsets;
+        indexBuffer = allocU32(gv.indexBuffer.length);
+        indexBuffer.set(gv.indexBuffer);
+        if (top) {
+            layout = "tessPolygonsWithOutlines";
+            let polyIdx = 0;
+            for (let f = 0; f < n; f++) {
+                if (types[f] === GEOMETRY_TYPE.POLYGON || types[f] === GEOMETRY_TYPE.MULTIPOLYGON) {
+                    if (polyIdx + 1 >= triangleOffsets.length) {
+                        throw new RangeError("v1 tessellated polygon triangleOffsets underflow");
+                    }
+                    const base = vertexIndexAt(top, f);
+                    const lo = triangleOffsets[polyIdx] * 3;
+                    const hi = triangleOffsets[polyIdx + 1] * 3;
+                    if (hi > indexBuffer.length) {
+                        throw new RangeError("v1 tessellated polygon indexBuffer underflow");
+                    }
+                    for (let k = lo; k < hi; k++) {
+                        indexBuffer[k] += base;
+                    }
+                    polyIdx++;
+                }
+            }
+        } else {
+            layout = "tessPolygons";
+        }
+    } else if (gv.vertexOffsets !== undefined || gv.vertexBufferType === VertexBufferType.MORTON) {
+        const vc = gv.vertexOffsets ? gv.vertexOffsets.length : gv.vertexBuffer.length;
+        vertices = allocI32(vc * 2);
+        for (let i = 0; i < vc; i++) {
+            const [x, y] = gv.getVertex(i);
+            vertices[i * 2] = x;
+            vertices[i * 2 + 1] = y;
+        }
+    } else {
+        vertices = allocI32(gv.vertexBuffer.length);
+        vertices.set(gv.vertexBuffer);
+    }
+
+    const buildPresent = (vec: Vector): { present?: Uint8Array } => {
+        let hasNull = false;
+        const bmp = new Uint8Array((n + 7) >>> 3);
+        for (let i = 0; i < n; i++) {
+            if (vec.getValue(i) !== null) bmp[i >>> 3] |= 1 << (i & 7);
+            else hasNull = true;
+        }
+        if (!hasNull) return {};
+        chargeBytes(bmp.byteLength);
+        return { present: bmp };
+    };
+
+    const fill = <A extends { [i: number]: number | bigint }>(
+        alloc: (len: number) => A,
+        fn: (i: number) => A[number],
+    ): A => {
+        const out = alloc(n);
+        for (let i = 0; i < n; i++) out[i] = fn(i);
+        return out;
+    };
+
+    let ids: MltIdColumn | undefined;
+    if (table.idVector) {
+        const idVec = table.idVector;
+        const p = buildPresent(idVec);
+        const is64 =
+            idVec instanceof Int64FlatVector ||
+            idVec instanceof Int64SequenceVector ||
+            idVec instanceof Int64ConstVector;
+        ids = is64
+            ? { kind: "u64", ...p, values: fill(allocU64, (i) => BigInt.asUintN(64, BigInt(idVec.getValue(i) ?? 0))) }
+            : { kind: "u32", ...p, values: fill(allocU32, (i) => Number(idVec.getValue(i) ?? 0) >>> 0) };
+    }
+
+    const properties: MltPropertyColumn[] = table.propertyVectors.map((vec): MltPropertyColumn => {
+        const name = vec.name;
+        const p = buildPresent(vec);
+        if (vec instanceof BooleanFlatVector)
+            return { name, kind: "bool", ...p, values: fill(allocU8, (i) => (vec.getValue(i) ? 1 : 0)) };
+        if (vec instanceof FloatFlatVector)
+            return { name, kind: "f32", ...p, values: fill(allocF32, (i) => vec.getValue(i) ?? 0) };
+        if (vec instanceof DoubleFlatVector)
+            return { name, kind: "f64", ...p, values: fill(allocF64, (i) => vec.getValue(i) ?? 0) };
+        if (vec instanceof Int64FlatVector || vec instanceof Int64SequenceVector || vec instanceof Int64ConstVector) {
+            return unsignedCols.has(name)
+                ? { name, kind: "u64", ...p, values: fill(allocU64, (i) => BigInt.asUintN(64, vec.getValue(i) ?? 0n)) }
+                : { name, kind: "i64", ...p, values: fill(allocI64, (i) => BigInt.asIntN(64, vec.getValue(i) ?? 0n)) };
+        }
+        if (vec instanceof Int32FlatVector || vec instanceof Int32SequenceVector || vec instanceof Int32ConstVector) {
+            return unsignedCols.has(name)
+                ? { name, kind: "u32", ...p, values: fill(allocU32, (i) => (vec.getValue(i) ?? 0) >>> 0) }
+                : { name, kind: "i32", ...p, values: fill(allocI32, (i) => (vec.getValue(i) ?? 0) | 0) };
+        }
+        let chars = 0;
+        const values = Array.from({ length: n }, (_, i) => {
+            const s = String(vec.getValue(i) ?? "");
+            chars += s.length;
+            return s;
+        });
+        chargeBytes(chars * 2);
+        return { name, kind: "str", ...p, values };
+    });
+
+    return {
+        name: table.name,
+        extent: table.extent,
+        version: 1,
+        featureCount: n,
+        geometry: {
+            types,
+            layout,
+            dimension: 2,
+            vertices,
+            ...(top?.geometryOffsets ? { geometryOffsets: top.geometryOffsets } : {}),
+            ...(top?.partOffsets ? { partOffsets: top.partOffsets } : {}),
+            ...(top?.ringOffsets ? { ringOffsets: top.ringOffsets } : {}),
+            ...(triangleOffsets ? { triangleOffsets } : {}),
+            ...(indexBuffer ? { indexBuffer } : {}),
+        },
+        ...(ids ? { ids } : {}),
+        properties,
+        vertexValues: [],
+        triangleValues: [],
+        mValues: [],
+    };
+}
+
 function identityOffsets(count: number): Uint32Array {
     const out = new Uint32Array(count + 1);
     for (let i = 0; i <= count; i++) out[i] = i;
@@ -216,7 +396,7 @@ class DictStringVector extends Vector<Uint32Array, string> {
     }
 }
 
-function v2PropertyToVector(col: V2PropertyColumn, numFeatures: number): Vector {
+function v2PropertyToVector(col: MltPropertyColumn, numFeatures: number): Vector {
     const nullability = col.present ? new BitVector(col.present, numFeatures) : undefined;
     const sizeOrNull = nullability ?? numFeatures;
     if ("codes" in col) {
@@ -244,7 +424,7 @@ function v2PropertyToVector(col: V2PropertyColumn, numFeatures: number): Vector 
 }
 
 function v2LayerToFeatureTable(
-    layer: V2Layer,
+    layer: MltColumnLayer,
     geometryScaling: GeometryScaling | undefined,
     idWithinMaxSafeInteger: boolean,
 ): FeatureTable {

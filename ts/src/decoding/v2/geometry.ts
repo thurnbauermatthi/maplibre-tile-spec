@@ -1,3 +1,4 @@
+import type { HeightMode, MltGeometryColumns, MltGeometryLayout } from "../../columns";
 import {
     decodeLevel1LengthStream,
     decodeLevel1WithoutRingBufferLengthStream,
@@ -5,7 +6,6 @@ import {
     decodeRootLengthStream,
 } from "../geometryDecoder";
 import { EMPTY_I32, EMPTY_U32, allocI32, allocU8, allocU32, chargeBytes, checkScratchBytes } from "./binary";
-import type { HeightMode, V2GeometryColumns, V2GeometryLayout } from "./layer";
 import { decodeRansVertices } from "./rans";
 import {
     LG_RANS,
@@ -188,7 +188,7 @@ export function decodeGeometry02(
     featureCount: number,
     typesStream: ParsedStream | null,
     items: readonly ParsedStream[],
-): V2GeometryColumns {
+): MltGeometryColumns {
     const isMeshes = uniformType === GEOM_MESH;
     let types: Uint8Array;
     if (uniformType >= 0) {
@@ -305,7 +305,7 @@ export function decodeGeometry02(
         vertices = expanded;
     }
 
-    const layout: V2GeometryLayout = isMeshes
+    const layout: MltGeometryLayout = isMeshes
         ? "meshes"
         : indexBuffer !== undefined
           ? levels.partOffsets === undefined

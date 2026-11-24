@@ -1,3 +1,4 @@
+import type { MltNestedColumn } from "../../columns";
 import {
     type ByteReader,
     allocArray,
@@ -10,7 +11,6 @@ import {
     readVarintU32,
     setOwnProp,
 } from "./binary";
-import type { V2NestedColumn } from "./layer";
 import { bitmapPopcount, isBitSet, normalizePresentBitmap } from "./presence";
 import {
     FM_BOOL,
@@ -414,7 +414,11 @@ function evalRow(node: DecodedTree, row: number, jsonMode: boolean): unknown {
     return obj;
 }
 
-export function decodeNestedColumn(rawNested: RawNestedColumn, featureCount: number, jsonMode = false): V2NestedColumn {
+export function decodeNestedColumn(
+    rawNested: RawNestedColumn,
+    featureCount: number,
+    jsonMode = false,
+): MltNestedColumn {
     const root = decodeTree(rawNested.root, null);
     checkTreeCounts(root);
     if (parentCount(root) !== rawNested.valueCount) throw new Error("nested root count");

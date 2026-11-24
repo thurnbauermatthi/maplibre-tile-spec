@@ -1,5 +1,6 @@
+import type { HeightMode, MltGeometryColumns, MltMValueColumn } from "../columns";
 import { setOwnProp } from "../decoding/v2/binary";
-import type { HeightMode, V2GeometryColumns, V2MValueColumn } from "../decoding/v2/layer";
+import { geometryStart, isTrianglesOnly, lineStart, meshTriangles } from "../featureGeometry";
 import { GEOMETRY_TYPE } from "./geometry/geometryType";
 import type { Geometry, GeometryVector } from "./geometry/geometryVector";
 import type Vector from "./vector";
@@ -22,15 +23,10 @@ export interface FeatureTableV2Meta {
     version: 1 | 2;
     zStep?: number;
     heightMode?: HeightMode;
-    vertexValues: readonly V2MValueColumn[];
-    triangleValues: readonly V2MValueColumn[];
-    mValues: readonly V2MValueColumn[];
-    columnGeometry: V2GeometryColumns;
-}
-
-function lineVertexStart(geom: V2GeometryColumns, line: number): number {
-    const p = geom.partOffsets === undefined ? line : geom.partOffsets[line];
-    return geom.ringOffsets === undefined ? p : geom.ringOffsets[p];
+    vertexValues: readonly MltMValueColumn[];
+    triangleValues: readonly MltMValueColumn[];
+    mValues: readonly MltMValueColumn[];
+    columnGeometry: MltGeometryColumns;
 }
 
 export default class FeatureTable {
@@ -93,15 +89,15 @@ export default class FeatureTable {
         return this._v2Meta?.heightMode;
     }
 
-    get vertexValues(): readonly V2MValueColumn[] {
+    get vertexValues(): readonly MltMValueColumn[] {
         return this._v2Meta?.vertexValues ?? [];
     }
 
-    get triangleValues(): readonly V2MValueColumn[] {
+    get triangleValues(): readonly MltMValueColumn[] {
         return this._v2Meta?.triangleValues ?? [];
     }
 
-    get mValues(): readonly V2MValueColumn[] {
+    get mValues(): readonly MltMValueColumn[] {
         return this._v2Meta?.mValues ?? [];
     }
 
@@ -114,7 +110,7 @@ export default class FeatureTable {
         const colGeom = this._v2Meta?.columnGeometry;
         const trisOnly =
             (this.geometryVector instanceof GpuVector && this.geometryVector.isTrianglesOnly) ||
-            colGeom?.layout === "tessPolygons";
+            (colGeom !== undefined && isTrianglesOnly(colGeom));
 
         for (let i = 0; i < this.numFeatures; i++) {
             let id: number | bigint | undefined;
@@ -132,8 +128,8 @@ export default class FeatureTable {
             if (trisOnly) {
                 geometry.trianglesOnly = true;
             } else if (geomType === GEOMETRY_TYPE.MULTIPOLYGON && colGeom?.partOffsets !== undefined) {
-                const g0 = colGeom.geometryOffsets ? colGeom.geometryOffsets[i] : i;
-                const g1 = colGeom.geometryOffsets ? colGeom.geometryOffsets[i + 1] : i + 1;
+                const g0 = geometryStart(colGeom, i);
+                const g1 = geometryStart(colGeom, i + 1);
                 const counts = new Array<number>(g1 - g0);
                 for (let g = g0; g < g1; g++) {
                     counts[g - g0] = colGeom.partOffsets[g + 1] - colGeom.partOffsets[g];
@@ -163,10 +159,10 @@ export default class FeatureTable {
                     }
                     feature.z = z;
                 } else {
-                    const g0 = colGeom.geometryOffsets ? colGeom.geometryOffsets[i] : i;
-                    const g1 = colGeom.geometryOffsets ? colGeom.geometryOffsets[i + 1] : i + 1;
-                    const v0 = lineVertexStart(colGeom, g0);
-                    const v1 = lineVertexStart(colGeom, g1);
+                    const g0 = geometryStart(colGeom, i);
+                    const g1 = geometryStart(colGeom, i + 1);
+                    const v0 = lineStart(colGeom, g0);
+                    const v1 = lineStart(colGeom, g1);
                     const z = new Array<number>(v1 - v0);
                     for (let v = v0; v < v1; v++) {
                         z[v - v0] = colGeom.vertices[v * 3 + 2];
@@ -175,22 +171,11 @@ export default class FeatureTable {
                 }
             }
 
-            if (
-                colGeom !== undefined &&
-                geomType === GEOMETRY_TYPE.MESH &&
-                colGeom.triangleOffsets &&
-                colGeom.indexBuffer
-            ) {
-                const v0 = colGeom.geometryOffsets ? colGeom.geometryOffsets[i] : i;
-                const t0 = colGeom.triangleOffsets[i];
-                const t1 = colGeom.triangleOffsets[i + 1];
-                const tris = new Array<[number, number, number]>(t1 - t0);
-                for (let t = t0; t < t1; t++) {
-                    tris[t - t0] = [
-                        colGeom.indexBuffer[t * 3] - v0,
-                        colGeom.indexBuffer[t * 3 + 1] - v0,
-                        colGeom.indexBuffer[t * 3 + 2] - v0,
-                    ];
+            if (colGeom !== undefined && geomType === GEOMETRY_TYPE.MESH) {
+                const flat = meshTriangles(colGeom, i);
+                const tris = new Array<[number, number, number]>(flat.length / 3);
+                for (let t = 0; t < tris.length; t++) {
+                    tris[t] = [flat[t * 3], flat[t * 3 + 1], flat[t * 3 + 2]];
                 }
                 feature.triangles = tris;
             }

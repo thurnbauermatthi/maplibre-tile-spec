@@ -1,24 +1,9 @@
-import type { V2MValueColumn } from "../decoding/v2/layer";
-import { isBitSet } from "../decoding/v2/presence";
+import { mValueSlice } from "../columns";
+import { mValueSliceToJson } from "../geojson";
 import { GEOMETRY_TYPE } from "./geometry/geometryType";
 import { classifyRings } from "./geometry/classifyRings";
 import type { Geometry } from "./geometry/geometryVector";
 import type FeatureTable from "./featureTable";
-
-function mValueFeatureJson(col: V2MValueColumn, featureIndex: number): unknown[] | null {
-    if (col.present !== undefined && !isBitSet(col.present, featureIndex)) return null;
-    const start = col.offsets[featureIndex];
-    const end = col.offsets[featureIndex + 1];
-    if ("codes" in col) {
-        return Array.from(col.codes.subarray(start, end), (c) => col.dictionary[c] ?? "");
-    }
-    if (col.kind === "str") return col.values.slice(start, end);
-    if (col.kind === "bool") return Array.from(col.values.subarray(start, end), (v) => v === 1);
-    if (col.kind === "i64" || col.kind === "u64") {
-        return Array.from(col.values.subarray(start, end), Number);
-    }
-    return Array.from(col.values.subarray(start, end));
-}
 
 /**
  * Converts decoded feature tables into the GeoJSON shape the synthetic fixtures are written in.
@@ -39,8 +24,8 @@ export function featureTablesToFeatureCollection(featureTables: FeatureTable[]):
                 if (table.heightMode === "relativeToGround") properties._height_mode = "relative_to_ground";
             }
             for (const mCol of table.mValues) {
-                const slice = mValueFeatureJson(mCol, i);
-                if (slice !== null) properties[`m:${mCol.name}`] = slice;
+                const slice = mValueSlice(mCol, i);
+                if (slice !== null) properties[`m:${mCol.name}`] = mValueSliceToJson(mCol, slice, false);
             }
 
             const geojsonFeature: GeoJSON.Feature & { triangles?: [number, number, number][] } = {

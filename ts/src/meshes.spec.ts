@@ -1,0 +1,289 @@
+import { readdirSync, readFileSync } from "node:fs";
+import * as path from "node:path";
+import { describe, expect, it } from "vitest";
+import { decodeAlpFloats, parseAlpScale, resetBudget, setOwnProp } from "./decoding/v2/binary";
+import { sliceStrings } from "./decoding/v2/strings";
+import {
+    columnValue,
+    decodeTile,
+    decodeTile3D,
+    decodeTileColumns,
+    decodeVectorTile,
+    featureGeometry,
+    GEOMETRY_TYPE,
+    geometryStarts,
+    isMeshes,
+    isTrianglesOnly,
+    MltGeometryType,
+    mValueSlice,
+    meshTriangles,
+    tileGeoJson,
+    toElevation,
+} from "./index";
+import { featureTablesToFeatureCollection } from "./vector/featureTablesToGeoJson";
+import { compareWithTolerance } from "../../test/synthetic/synthetic-test-utils";
+
+const REPO_ROOT = path.resolve(__dirname, "../..");
+const SYNTHETIC_02 = path.join(REPO_ROOT, "test/synthetic/0x02");
+const SYNTHETIC_01 = path.join(REPO_ROOT, "test/synthetic/0x01");
+const CITYGML_FIXTURES = [
+    path.join(REPO_ROOT, "test/fixtures/meshes/tiles/15/17294/10590.mlt"),
+    path.join(REPO_ROOT, "test/fixtures/meshes/tiles/16/34588/21180.mlt"),
+];
+
+function readSynthetic02(stem: string): { mlt: Uint8Array; expected: Record<string, unknown> } {
+    return {
+        mlt: new Uint8Array(readFileSync(path.join(SYNTHETIC_02, `${stem}.mlt`))),
+        expected: JSON.parse(readFileSync(path.join(SYNTHETIC_02, `${stem}.json`), "utf-8")),
+    };
+}
+
+describe("MLT v2 3D Meshes, Z-axis, M-values, and Columnar APIs", () => {
+    expect.addEqualityTesters([compareWithTolerance]);
+
+    for (const fixturePath of CITYGML_FIXTURES) {
+        const label = path.relative(REPO_ROOT, fixturePath).replaceAll(path.sep, "/");
+        it(`decodes ${label} across decodeTileColumns, decodeTile3D, decodeTile, and tileGeoJson`, () => {
+            const bytes = new Uint8Array(readFileSync(fixturePath));
+            const colTile = decodeTileColumns(bytes);
+            const tile3d = decodeTile3D(bytes);
+            const tables = decodeTile(bytes, undefined, false);
+            expect(colTile.layers.length).toBeGreaterThan(0);
+            expect(tables.length).toBe(colTile.layers.length);
+            expect(featureTablesToFeatureCollection(tables)).toEqual(tileGeoJson(bytes));
+
+            for (let l = 0; l < colTile.layers.length; l++) {
+                const layer = colTile.layers[l];
+                const table = tables[l];
+                const { geometry } = layer;
+                expect(layer.version).toBe(2);
+                expect(table.version).toBe(2);
+                expect(geometry.dimension).toBe(3);
+                expect(table.zStep).toBe(geometry.zStep);
+                expect(table.heightMode).toBe(geometry.heightMode);
+                if (!isMeshes(geometry)) continue;
+
+                expect(geometry.layout).toBe("meshes");
+                expect(isTrianglesOnly(geometry)).toBe(false);
+                expect(geometryStarts(geometry).featureGeometries.length).toBe(layer.featureCount + 1);
+
+                const layer3d = tile3d.layers[layer.name];
+                const tableFeatures = table.getFeatures();
+                expect(layer3d.length).toBe(layer.featureCount);
+                expect(tableFeatures.length).toBe(layer.featureCount);
+
+                for (let f = 0; f < layer.featureCount; f++) {
+                    expect(geometry.types[f]).toBe(MltGeometryType.Mesh);
+                    expect(tableFeatures[f].geometry.type).toBe(GEOMETRY_TYPE.MESH);
+                    const fg = featureGeometry(layer, f);
+                    if (fg.kind !== "mesh") throw new Error("expected mesh");
+                    const vertCount = fg.vertices.length / 3;
+                    expect(vertCount).toBeGreaterThanOrEqual(3);
+                    expect(fg.triangles.length).toBeGreaterThanOrEqual(3);
+                    expect(fg.triangles.length % 3).toBe(0);
+                    for (let k = 0; k < fg.triangles.length; k++) {
+                        expect(fg.triangles[k]).toBeGreaterThanOrEqual(0);
+                        expect(fg.triangles[k]).toBeLessThan(vertCount);
+                    }
+                    const f3d = layer3d.feature(f);
+                    const rings3d = f3d.loadGeometry();
+                    expect(rings3d[0].length).toBe(vertCount);
+                    expect(f3d.loadTriangles()).toEqual(fg.triangles);
+                    expect(() => f3d.loadPolygons()).toThrow(/mesh/i);
+                    expect(Number.isFinite(toElevation(rings3d[0][0][2], layer3d.zStep))).toBe(true);
+                }
+            }
+        });
+    }
+
+    for (const stem of [
+        "mesh_triangle",
+        "mesh_roof_wall",
+        "mesh_relative_to_ground",
+        "mesh_mvalues_vertex",
+        "mesh_mvalues_triangle",
+        "mesh_mvalues_both",
+    ]) {
+        it(`matches expected GeoJSON and columnar invariants for ${stem}`, () => {
+            const { mlt, expected } = readSynthetic02(stem);
+            expect(tileGeoJson(mlt)).toEqual(expected);
+            const layer = decodeTileColumns(mlt).layers[0];
+            const layer3d = decodeTile3D(mlt).layers[layer.name];
+            expect(isMeshes(layer.geometry)).toBe(true);
+
+            for (let f = 0; f < layer.featureCount; f++) {
+                const tris = meshTriangles(layer.geometry, f);
+                const f3d = layer3d.feature(f);
+                expect(f3d.loadTriangles()).toEqual(tris);
+                for (const vCol of layer.vertexValues) {
+                    const s1 = mValueSlice(vCol, f);
+                    expect(mValueSlice(layer, vCol, f)).toEqual(s1);
+                    expect(f3d.loadVertexValues(vCol.name)).toEqual(s1 ?? undefined);
+                }
+                for (const tCol of layer.triangleValues) {
+                    const s1 = mValueSlice(tCol, f);
+                    expect(mValueSlice(layer, tCol, f)).toEqual(s1);
+                    expect(f3d.loadTriangleValues(tCol.name)).toEqual(s1 ?? undefined);
+                }
+            }
+        });
+    }
+
+    it("preserves relativeToGround, VectorTile/3D guards, v1 tiles, filtering, and maxBytes", () => {
+        const { mlt: relMlt } = readSynthetic02("mesh_relative_to_ground");
+        const relLayer = decodeTileColumns(relMlt).layers[0];
+        expect(relLayer.geometry.heightMode).toBe("relativeToGround");
+        expect(decodeTile3D(relMlt).layers[relLayer.name].feature(0).heightMode).toBe("relativeToGround");
+        expect(decodeTile(relMlt)[0].heightMode).toBe("relativeToGround");
+
+        const { mlt: zPolyMlt, expected: zPolyExpected } = readSynthetic02("z_poly_hole");
+        expect(tileGeoJson(zPolyMlt)).toEqual(zPolyExpected);
+        const vt = decodeVectorTile(zPolyMlt);
+        const ln = Object.keys(vt.layers)[0];
+        expect(vt.layers[ln].feature(0).loadPolygons().length).toBe(1);
+        expect(vt.layers[ln].feature(0).loadZ().length).toBeGreaterThan(0);
+        expect(decodeTile3D(zPolyMlt).layers[ln].feature(0).loadPolygons()[0][0][0].length).toBe(3);
+
+        expect(() => decodeTile3D(readSynthetic02("prop_i32").mlt)).toThrow(/no z coordinates/i);
+
+        const { mlt: zTriMlt } = readSynthetic02("z_poly_hole_tri");
+        const triLayer = decodeTileColumns(zTriMlt).layers[0];
+        expect(isTrianglesOnly(triLayer.geometry)).toBe(true);
+        expect(() => decodeTile3D(zTriMlt)).toThrow(/TessPolygons/i);
+        expect(() => featureGeometry(triLayer, 0)).toThrow(/TessPolygons/i);
+        expect(() => geometryStarts(triLayer.geometry)).toThrow(/TessPolygons/i);
+
+        const v1Bytes = new Uint8Array(readFileSync(path.join(SYNTHETIC_01, "props_shared_dict.mlt")));
+        const v1Expected = JSON.parse(readFileSync(path.join(SYNTHETIC_01, "props_shared_dict.json"), "utf-8"));
+        const v1Layer = decodeTileColumns(v1Bytes).layers[0];
+        expect(v1Layer.version).toBe(1);
+        expect(columnValue(v1Layer.properties[0], 0)).not.toBeNull();
+        expect(tileGeoJson(v1Bytes)).toEqual(v1Expected);
+
+        const cityBytes = new Uint8Array(readFileSync(CITYGML_FIXTURES[0]));
+        const firstName = decodeTileColumns(cityBytes).layers[0].name;
+        expect(decodeTileColumns(cityBytes, { layers: [firstName] }).layers.map((l) => l.name)).toEqual([firstName]);
+        expect(decodeTileColumns(cityBytes, { layers: ["__missing__"] }).layers).toEqual([]);
+
+        expect(() => decodeTileColumns(cityBytes, { maxBytes: 128 })).toThrow(RangeError);
+        expect(() => decodeTileColumns(readSynthetic02("props_str_dict").mlt, { maxBytes: 8 })).toThrow(RangeError);
+    });
+
+    it("enforces exact ALP two-step IEEE-754 rounding, multibyte UTF-8 bounds, __proto__ safety, and block framing", () => {
+        resetBudget();
+        // Exact Rust reference case: 3 * 1e0 * 1e-1 === 0.30000000000000004 (differs from 3 / 10 === 0.3)
+        const alp03 = decodeAlpFloats([0], BigInt(3), parseAlpScale(1), false) as Float64Array;
+        expect(Object.is(alp03[0], 3 * 1 * 1e-1)).toBe(true);
+        // Full i64 range beyond Number.MAX_SAFE_INTEGER
+        const bigCode = BigInt(1) << BigInt(55);
+        const alpBig = decodeAlpFloats([0], bigCode, parseAlpScale(0), false) as Float64Array;
+        expect(alpBig[0]).toBe(Number(bigCode));
+
+        // Multibyte UTF-8 + astral surrogate pairs + split-codepoint rejection
+        const enc = new TextEncoder();
+        const parts = ["Tokyo 東京", "", "🌍🚀", "München"];
+        const lengths = new Uint32Array(parts.map((s) => enc.encode(s).length));
+        const joined = new Uint8Array(lengths.reduce((a, b) => a + b, 0));
+        let pos = 0;
+        for (const s of parts) {
+            const b = enc.encode(s);
+            joined.set(b, pos);
+            pos += b.length;
+        }
+        expect(sliceStrings(joined, lengths)).toEqual(parts);
+        // Splitting inside 4-byte emoji (first 2 bytes + last 2 bytes) must throw TypeError
+        const emojiBytes = enc.encode("🌍");
+        expect(() => sliceStrings(emojiBytes, new Uint32Array([2, 2]))).toThrow(TypeError);
+        expect(() => sliceStrings(new Uint8Array([0xff]), new Uint32Array([1]))).toThrow(TypeError);
+
+        // Prototype-pollution safety on __proto__ keys
+        const obj: Record<string, unknown> = {};
+        setOwnProp(obj, "__proto__", { polluted: 1 });
+        expect(Object.getPrototypeOf(obj)).toBe(Object.prototype);
+        expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+        expect(Object.getOwnPropertyDescriptor(obj, "__proto__")?.value).toEqual({ polluted: 1 });
+
+        // Zero-length layer block and truncated multi-byte tag rejection across both decoders
+        for (const bad of [new Uint8Array([0x00]), new Uint8Array([0x00, 0x02]), new Uint8Array([0x01, 0x80])]) {
+            expect(() => decodeTile(bad)).toThrow();
+            expect(() => decodeTileColumns(bad)).toThrow();
+        }
+    });
+
+    it("matches expected GeoJSON via tileGeoJson across all 0x01 and 0x02 synthetic tiles", () => {
+        for (const dir of [SYNTHETIC_01, SYNTHETIC_02]) {
+            const stems = readdirSync(dir)
+                .filter((f) => f.endsWith(".mlt"))
+                .map((f) => f.slice(0, -4))
+                .sort();
+            expect(stems.length).toBeGreaterThan(300);
+            for (const stem of stems) {
+                const mlt = new Uint8Array(readFileSync(path.join(dir, `${stem}.mlt`)));
+                const expected = JSON.parse(readFileSync(path.join(dir, `${stem}.json`), "utf-8"));
+                expect(tileGeoJson(mlt)).toEqual(expected);
+            }
+        }
+    }, 30_000);
+
+    it("survives hostile truncations and deterministic byte mutations without hangs, OOMs, or broken invariants", () => {
+        const seeds = [
+            readSynthetic02("props_str_dict").mlt,
+            readSynthetic02("props_str_fsst").mlt,
+            readSynthetic02("nested_struct_shapes").mlt,
+            readSynthetic02("mesh_mvalues_both").mlt,
+            readSynthetic02("z_poly_hole_tes").mlt,
+        ];
+
+        // 1. Every strict prefix truncation must throw cleanly (or decode empty at length 0)
+        for (const buf of seeds) {
+            expect(decodeTileColumns(buf.subarray(0, 0)).layers).toEqual([]);
+            for (let len = 1; len < buf.length; len++) {
+                const slice = buf.subarray(0, len);
+                expect(() => decodeTileColumns(slice, { maxBytes: 4 * 1024 * 1024 })).toThrow();
+                expect(() => decodeTile(slice)).toThrow();
+            }
+        }
+
+        // 2. Deterministic PRNG 1-3 byte mutations: if decodeTileColumns succeeds, all downstream views must stay consistent
+        let rng = 0x9e3779b9;
+        const nextU32 = () => {
+            rng ^= rng << 13;
+            rng ^= rng >>> 17;
+            rng ^= rng << 5;
+            return rng >>> 0;
+        };
+
+        for (let iter = 0; iter < 1500; iter++) {
+            const src = seeds[nextU32() % seeds.length];
+            const mut = src.slice();
+            const flips = 1 + (nextU32() % 3);
+            for (let k = 0; k < flips; k++) {
+                const idx = nextU32() % mut.length;
+                const mode = nextU32() % 4;
+                mut[idx] = mode === 0 ? 0 : mode === 1 ? 0xff : mode === 2 ? 0x80 : nextU32() & 0xff;
+            }
+            let colTile: ReturnType<typeof decodeTileColumns>;
+            try {
+                colTile = decodeTileColumns(mut, { maxBytes: 4 * 1024 * 1024 });
+            } catch {
+                continue;
+            }
+            const gj = tileGeoJson(mut);
+            expect(Array.isArray(gj.features)).toBe(true);
+            for (const layer of colTile.layers) {
+                if (!isTrianglesOnly(layer.geometry)) {
+                    const starts = geometryStarts(layer.geometry);
+                    expect(starts.featureGeometries.length).toBe(layer.featureCount + 1);
+                    for (let f = 0; f < layer.featureCount; f++) {
+                        expect(featureGeometry(layer, f, starts).kind).toBeTruthy();
+                    }
+                }
+                for (const col of layer.properties) {
+                    for (let f = 0; f < layer.featureCount; f++) {
+                        columnValue(col, f);
+                    }
+                }
+            }
+        }
+    });
+});

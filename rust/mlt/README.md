@@ -7,7 +7,7 @@ The `mlt` binary provides several commands for working with MLT files:
 * **`dump`** - Parse an MLT file and dump raw layer data without decoding
 * **`decode`** - Parse an MLT file, decode all layers, and dump the result (supports text and `GeoJSON` output)
 * **`hexdump`** - Annotated byte/bit-level hexdump of an MLT file's metadata and stream payloads
-* **`convert`** - Convert MVT or MLT tile files and MVT `.mbtiles`/`.pmtiles` archives to MLT, or tile a `GeoJSON` file, including 3D positions, or the buildings of `CityGML` and `CityJSON` files into MLT files
+* **`convert`** - Convert MVT or MLT tile files and MVT `.mbtiles`/`.pmtiles` archives to MLT, or tile a `GeoJSON` file, including 3D positions, the buildings of `CityGML` and `CityJSON` files, or `glTF` 2.0 models into MLT files
 * **`ui`** - Interactive terminal visualizer for MLT files
 
 ### Format conversion
@@ -113,6 +113,25 @@ takes the place of the ground found from its surfaces.
 With `--fix-mislabelled-crs`, a file whose coordinates lie more than 1 degree from the input's
 other files in the CRS it names, but near them in the CRS most files name, is read in the latter
 with a warning.
+
+### Tiling glTF meshes
+
+`convert` also tiles `glTF` 2.0 `.gltf` and `.glb` models, a directory of them, or a `.toml`
+landmark manifest into a directory of `z/x/y.mlt` tiles holding a `Meshes` layer:
+
+```bash
+mlt convert monument.glb tiles --mlt-version 2 --min-zoom 13 --max-zoom 16 --anchor 2.3316,48.8720
+mlt convert landmarks.toml tiles --mlt-version 2
+```
+
+Models without `CESIUM_RTC` take `--anchor lon,lat` in WGS84 degrees (`+X` east, `+Y` up, `-Z`
+north in metres); models carrying `CESIUM_RTC` place their ECEF positions directly on WGS84.
+`--ground origin` (default for `--anchor`) keeps `y = 0` at `z = 0`, while `--ground lowest`
+(default for `CESIUM_RTC`) shifts the lowest vertex to `z = 0`. Each feature stores `name`,
+`height` (metres above ground), any custom `[landmarks.properties]`, and triangle-scoped `part`
+and `color` (`0xRRGGBB` sRGB) m-values. Zooms below a model's `max-zoom` simplify within 0.45
+pixels while preserving `(part, color)` seams; a `.toml` manifest can also give explicit per-zoom
+`models = [{ gltf = "...", min-zoom = 13, max-zoom = 15 }, ...]` and `[[parts]]` glob rules.
 
 ### Visualizer
 

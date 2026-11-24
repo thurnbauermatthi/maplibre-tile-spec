@@ -55,27 +55,12 @@ internal interface MltEncoderOptionsLib : Library {
         enabled: Boolean,
     ): Unit
 
-    fun MltEncoderOptions_set_allow_delta2(
+    fun MltEncoderOptions_set_allow_predicted_vertices(
         handle: Pointer,
         enabled: Boolean,
     ): Unit
 
-    fun MltEncoderOptions_set_allow_float_dict(
-        handle: Pointer,
-        enabled: Boolean,
-    ): Unit
-
-    fun MltEncoderOptions_set_allow_float_alp(
-        handle: Pointer,
-        enabled: Boolean,
-    ): Unit
-
-    fun MltEncoderOptions_set_allow_packed_dict_codes(
-        handle: Pointer,
-        enabled: Boolean,
-    ): Unit
-
-    fun MltEncoderOptions_set_allow_rans_vertices(
+    fun MltEncoderOptions_set_allow_presence_rle(
         handle: Pointer,
         enabled: Boolean,
     ): Unit
@@ -204,38 +189,17 @@ class MltEncoderOptions internal constructor(
     }
 
     /**
-     * v2 only: allow integer and vertex streams to store the deltas of their deltas.
+     * v2 only: allow plain vertex streams to be stored as predicted vertices.
      */
-    fun setAllowDelta2(enabled: Boolean) {
-        val returnVal = lib.MltEncoderOptions_set_allow_delta2(handle, enabled)
+    fun setAllowPredictedVertices(enabled: Boolean) {
+        val returnVal = lib.MltEncoderOptions_set_allow_predicted_vertices(handle, enabled)
     }
 
     /**
-     * v2 only: allow float columns to store one code per value into a dictionary.
+     * v2 only: allow presence bitfields and bool columns to be byte-RLE coded, an extension.
      */
-    fun setAllowFloatDict(enabled: Boolean) {
-        val returnVal = lib.MltEncoderOptions_set_allow_float_dict(handle, enabled)
-    }
-
-    /**
-     * v2 only: allow float columns to store each value as a decimal-scaled integer (ALP).
-     */
-    fun setAllowFloatAlp(enabled: Boolean) {
-        val returnVal = lib.MltEncoderOptions_set_allow_float_alp(handle, enabled)
-    }
-
-    /**
-     * v2 only: allow dictionary code streams to be bit-packed.
-     */
-    fun setAllowPackedDictCodes(enabled: Boolean) {
-        val returnVal = lib.MltEncoderOptions_set_allow_packed_dict_codes(handle, enabled)
-    }
-
-    /**
-     * v2 only: allow plain vertex streams to be rANS-coded.
-     */
-    fun setAllowRansVertices(enabled: Boolean) {
-        val returnVal = lib.MltEncoderOptions_set_allow_rans_vertices(handle, enabled)
+    fun setAllowPresenceRle(enabled: Boolean) {
+        val returnVal = lib.MltEncoderOptions_set_allow_presence_rle(handle, enabled)
     }
 
     /**

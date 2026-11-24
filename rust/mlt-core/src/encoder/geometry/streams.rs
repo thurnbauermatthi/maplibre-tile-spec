@@ -12,7 +12,7 @@ use crate::MltResult;
 use crate::codecs::hilbert::hilbert_sort_key;
 use crate::codecs::zigzag::encode_componentwise_delta_vec2s;
 #[cfg(feature = "unstable-v2")]
-use crate::codecs::zigzag::{encode_componentwise_delta_vec3s, encode_componentwise_delta2_vec2s};
+use crate::codecs::zigzag::encode_componentwise_delta_vec3s;
 use crate::decoder::GeometryType::Point;
 #[cfg(feature = "unstable-v2")]
 use crate::decoder::XyzLogical;
@@ -453,36 +453,6 @@ pub(super) fn encode_vec2_vertex_stream02(
     vec2_vertex_stream(vertices, enc, codecs, false).map(|_| ())
 }
 
-/// The plain vertex layout as componentwise deltas of the componentwise deltas.
-#[cfg(feature = "unstable-v2")]
-pub(super) fn encode_vec2_delta2_vertex_stream02(
-    vertices: &[i32],
-    enc: &mut Encoder,
-    codecs: &mut Codecs,
-) -> MltResult<()> {
-    let delta2 = encode_componentwise_delta2_vec2s(vertices, &mut codecs.logical.u32_tmp);
-    let ctx = StreamCtx::geom(StreamType::Data(DictionaryType::Vertex), "vertex");
-    let logical = LogicalEncoding::Vertex(VertexLogical::ComponentwiseDelta2);
-    write_geo_precomputed_stream(delta2, ctx, logical, enc, &mut codecs.physical, false).map(|_| ())
-}
-
-/// The plain vertex layout rANS-coded over the layer's vertex runs, which start at `offsets`.
-#[cfg(feature = "unstable-v2")]
-pub(super) fn encode_rans_vertex_stream02(
-    vertices: &[i32],
-    offsets: Option<&[u32]>,
-    enc: &mut Encoder,
-) -> MltResult<()> {
-    let payload = crate::codecs::rans::encode_vertices(vertices, offsets)?;
-    let meta = StreamMeta::new2(
-        StreamType::Data(DictionaryType::Vertex),
-        LogicalEncoding::Vertex(VertexLogical::Rans),
-        PhysicalEncoding::None,
-        vertices.len(),
-    )?;
-    write_stream_payload(enc, meta, false, &payload)
-}
-
 /// The plain vertex layout as predicted vertices over the layer's vertex `runs`, each ring or line
 /// guessed to start near the start or `from_end` the end of the run before it.
 #[cfg(feature = "unstable-v2")]
@@ -492,8 +462,7 @@ pub(super) fn encode_predicted_vertex_stream02(
     from_end: bool,
     enc: &mut Encoder,
 ) -> MltResult<()> {
-    let payload =
-        crate::codecs::predicted::encode(vertices, runs, enc.config().predicted_frames(), from_end);
+    let payload = crate::codecs::predicted::encode(vertices, runs, from_end);
     let meta = StreamMeta::new2(
         StreamType::Data(DictionaryType::Vertex),
         LogicalEncoding::Vertex(VertexLogical::Predicted),

@@ -1,0 +1,18 @@
+[package]
+name = "mltlab"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+anyhow = "1"
+brotli = "9"
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+mlt-core = { path = "../../rust/mlt-core", features = ["__private-v2"] }
+rayon = "1"
+zstd = "0.14"
+
+[profile.release]
+codegen-units = 4

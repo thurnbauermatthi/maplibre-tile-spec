@@ -1,10 +1,7 @@
 use bytemuck::{NoUninit, cast_slice};
-#[cfg(feature = "unstable-v2")]
-use fastpfor::FastPFor128;
 use fastpfor::FastPFor256;
 
 use crate::codecs::bytes::encode_bools_to_bytes;
-use crate::codecs::float::FloatValue;
 use crate::codecs::rle::encode_byte_rle;
 #[cfg(not(feature = "unstable-v2"))]
 use crate::decoder::RleLayout;
@@ -12,24 +9,12 @@ use crate::decoder::{
     BoolLogical, IntLogical, LogicalEncoding, PhysicalEncoding, RleMeta, StreamMeta, StreamType,
     ValueKind,
 };
-#[cfg(feature = "unstable-v2")]
-use crate::decoder::{FloatLogical, OffsetType};
 use crate::encoder;
 use crate::encoder::Encoder;
-#[cfg(feature = "unstable-v2")]
-use crate::encoder::WireVersion;
-#[cfg(feature = "unstable-v2")]
-use crate::encoder::model::FloatEncoding;
 use crate::encoder::model::StreamCtx;
-#[cfg(feature = "unstable-v2")]
-use crate::encoder::stream::float_alp::AlpStream;
-#[cfg(feature = "unstable-v2")]
-use crate::encoder::stream::float_dict::FloatDict;
 use crate::encoder::stream::logical::LogicalEncoder;
 use crate::encoder::stream::optimizer::DataProfile;
 use crate::encoder::write::{LogicalIntCodec, LogicalIntStreamKind, PhysicalIntStreamKind};
-#[cfg(feature = "unstable-v2")]
-use crate::errors::MltError;
 use crate::errors::MltResult;
 
 #[derive(Default)]
@@ -59,8 +44,6 @@ pub struct PhysicalCodecs {
     pub(crate) u32_tmp: Vec<u32>,
     pub(crate) u8_tmp: Vec<u8>,
     pub(crate) fastpfor256: FastPFor256,
-    #[cfg(feature = "unstable-v2")]
-    pub(crate) fastpfor128: FastPFor128,
 }
 
 #[derive(Default)]
@@ -119,14 +102,11 @@ impl Codecs {
         self.write_bool_stream(values, StreamType::Present, enc)
     }
 
-    #[cfg_attr(
-        not(feature = "unstable-v2"),
-        expect(
-            clippy::unused_self,
-            reason = "kept as a Codecs method to match the other stream writers"
-        )
+    #[expect(
+        clippy::unused_self,
+        reason = "kept as a Codecs method to match the other stream writers"
     )]
-    pub(crate) fn write_float_stream<T: NoUninit + FloatValue>(
+    pub(crate) fn write_float_stream<T: NoUninit>(
         &mut self,
         values: &[T],
         ctx: &StreamCtx<'_>,
@@ -135,103 +115,8 @@ impl Codecs {
         #[cfg(not(target_endian = "little"))]
         compile_error!("not implemented for non-little-endian targets");
 
-        // v1 has no way to write either encoding, and one `Layer` is encoded as both versions.
-        #[cfg(feature = "unstable-v2")]
-        if enc.config().wire_version() != WireVersion::V01 {
-            match enc.override_float_enc(&ctx.qualified()) {
-                // A pinned encoding is written as asked, with nothing costed against it.
-                Some(FloatEncoding::Alp) => {
-                    #[expect(
-                        clippy::unnecessary_lazy_evaluations,
-                        reason = "an eager error is dropped on every success"
-                    )]
-                    let mut alp =
-                        AlpStream::smallest(values).ok_or_else(|| MltError::NoAlpParameters)?;
-                    // The pin names the logical encoding; the physical one still races.
-                    alp.race_fastpfor(&mut self.physical, enc.config())?;
-                    return self.write_alp_stream(&alp, ctx.stream_type, enc);
-                }
-                Some(FloatEncoding::Dict) => {
-                    let dict = FloatDict::build(values)?;
-                    return self.write_float_dict_streams(values, &dict, ctx.stream_type, enc);
-                }
-                Some(FloatEncoding::None) => {}
-                None => {
-                    // Both candidates already beat storing the floats raw, so the smaller of the two does too.
-                    let dict = if enc.config().allow_float_dict() {
-                        FloatDict::worth_building(values)
-                    } else {
-                        None
-                    };
-                    let alp = if enc.config().allow_float_alp() {
-                        AlpStream::worth_building(values, &mut self.physical, enc.config())?
-                    } else {
-                        None
-                    };
-                    let dict_bytes = dict.as_ref().map_or(usize::MAX, FloatDict::stored_bytes);
-                    let alp_bytes = alp.as_ref().map_or(usize::MAX, AlpStream::stored_bytes);
-                    if alp_bytes <= dict_bytes
-                        && let Some(alp) = alp
-                    {
-                        return self.write_alp_stream(&alp, ctx.stream_type, enc);
-                    }
-                    if let Some(dict) = dict {
-                        return self.write_float_dict_streams(values, &dict, ctx.stream_type, enc);
-                    }
-                }
-            }
-        }
-
         let meta = StreamMeta::new_none(ctx.stream_type, ValueKind::Float, values.len())?;
         encoder::write_stream_payload(enc, meta, false, cast_slice(values))
-    }
-
-    /// Write a float column as Framed, Exception-Free ALP integers, its parameters in the header.
-    #[cfg(feature = "unstable-v2")]
-    fn write_alp_stream(
-        &mut self,
-        alp: &AlpStream,
-        stream_type: StreamType,
-        enc: &mut Encoder,
-    ) -> MltResult<()> {
-        let count = alp.offsets.len();
-        let (physical, payload) = alp.payload(&mut self.physical);
-        let meta = StreamMeta::new2(
-            stream_type,
-            LogicalEncoding::Float(FloatLogical::Alp(alp.params)),
-            physical,
-            count,
-        )?;
-        encoder::write_stream_payload(enc, meta, false, payload)
-    }
-
-    /// Write a float column as a codes stream followed by its dictionary.
-    /// Codes first, so only the dictionary needs a count in its header.
-    #[cfg(feature = "unstable-v2")]
-    fn write_float_dict_streams<T: NoUninit + FloatValue>(
-        &mut self,
-        values: &[T],
-        dict: &FloatDict<T>,
-        stream_type: StreamType,
-        enc: &mut Encoder,
-    ) -> MltResult<()> {
-        use crate::decoder::DictionaryType;
-
-        let codes_meta = StreamMeta::new2(
-            stream_type,
-            LogicalEncoding::Float(FloatLogical::Dict),
-            PhysicalEncoding::VarInt,
-            values.len(),
-        )?;
-        let codes = self.physical.varint(&dict.codes);
-        encoder::write_stream_payload(enc, codes_meta, false, codes)?;
-
-        let values_meta = StreamMeta::new_none(
-            StreamType::Data(DictionaryType::Single),
-            ValueKind::Float,
-            dict.values.len(),
-        )?;
-        encoder::write_stream_payload(enc, values_meta, false, cast_slice(&dict.values))
     }
 
     pub(crate) fn write_int_stream<T>(
@@ -302,13 +187,6 @@ impl Codecs {
         }
 
         let fastpfor = enc.config().fastpfor();
-        // Bit packing earns its width byte on a dictionary's codes, whose alphabet is small
-        // and known; every other stream would only pay for the measurement.
-        #[cfg(feature = "unstable-v2")]
-        let bitpacked = enc.config().allow_packed_dict_codes()
-            && matches!(ctx.stream_type, StreamType::Offset(OffsetType::String));
-        #[cfg(feature = "unstable-v2")]
-        let delta2 = enc.config().allow_delta2();
         let mut alt = enc.try_alternatives();
 
         let sample = logical.none(DataProfile::take_sample(values));
@@ -324,8 +202,6 @@ impl Codecs {
                 logical_enc,
                 ctx.stream_type,
                 fastpfor,
-                #[cfg(feature = "unstable-v2")]
-                bitpacked,
             )?;
         }
         if profile.delta_is_beneficial() {
@@ -336,20 +212,6 @@ impl Codecs {
                 LE::Int(IntLogical::Delta),
                 ctx.stream_type,
                 fastpfor,
-                #[cfg(feature = "unstable-v2")]
-                bitpacked,
-            )?;
-        }
-        #[cfg(feature = "unstable-v2")]
-        if delta2 && profile.delta_is_beneficial() {
-            let values = logical.delta2(values);
-            physical.write_alternatives::<Output<T>>(
-                &mut alt,
-                values,
-                LE::Int(IntLogical::Delta2),
-                ctx.stream_type,
-                fastpfor,
-                bitpacked,
             )?;
         }
         if profile.rle_is_viable() {
@@ -360,8 +222,6 @@ impl Codecs {
                 logical_enc,
                 ctx.stream_type,
                 fastpfor,
-                #[cfg(feature = "unstable-v2")]
-                bitpacked,
             )?;
         }
         let values = logical.none(values);
@@ -371,8 +231,6 @@ impl Codecs {
             LE::Int(IntLogical::None),
             ctx.stream_type,
             fastpfor,
-            #[cfg(feature = "unstable-v2")]
-            bitpacked,
         )
     }
 }

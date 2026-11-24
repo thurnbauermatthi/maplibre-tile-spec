@@ -100,10 +100,6 @@ pub fn decode_blob(
                 max_values,
             )
         }
-        #[cfg(feature = "unstable-v2")]
-        DecodeHint::Rans => DecodedBlob::Binary {
-            len: count(data.len()),
-        },
         DecodeHint::Bool => match RawStream::new(meta, data).decode_bools(dec) {
             Ok(v) => bools(v, max_values),
             Err(e) => error(&e),
@@ -134,11 +130,6 @@ pub fn decode_blob(
         ),
         DecodeHint::U64 => bigints(
             RawStream::new(meta, data).decode_ints::<u64>(dec),
-            max_values,
-        ),
-        #[cfg(feature = "unstable-v2")]
-        DecodeHint::Alp(params) => bigints(
-            RawStream::new(meta, data).decode_alp_codes(params, dec),
             max_values,
         ),
         DecodeHint::Bytes => match std::str::from_utf8(data) {

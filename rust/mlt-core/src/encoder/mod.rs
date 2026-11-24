@@ -26,7 +26,7 @@ mod writer;
 #[cfg(not(feature = "__private"))]
 pub(crate) use geometry::VertexBufferType;
 #[cfg(all(test, not(feature = "__private")))]
-pub(crate) use model::{ExplicitEncoder, FloatEncoding, StagedLayer, StrEncoding};
+pub(crate) use model::{ExplicitEncoder, StagedLayer, StrEncoding};
 #[cfg(all(feature = "unstable-v2", not(feature = "__private")))]
 pub(crate) use mvalue::{StagedMValue, StagedValues};
 #[cfg(all(feature = "unstable-v2", not(feature = "__private")))]
@@ -49,7 +49,7 @@ pub use crate::encoder::model::{
 };
 #[cfg(feature = "__private")]
 pub use crate::encoder::model::{
-    ColumnKind, CurveParams, ExplicitEncoder, FloatEncoding, StagedLayer, StrEncoding, StreamCtx,
+    ColumnKind, CurveParams, ExplicitEncoder, StagedLayer, StrEncoding, StreamCtx,
 };
 #[cfg(all(feature = "unstable-v2", feature = "__private"))]
 pub use crate::encoder::mvalue::{StagedMValue, StagedValues};

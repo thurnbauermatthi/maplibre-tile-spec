@@ -6,9 +6,7 @@
 //! - a ring or line starts near where the previous ring or line started, or, for layers whose
 //!   lines continue one another, where the previous run ended,
 //! - the fourth vertex of a four-vertex ring completes a parallelogram,
-//! - every other edge is stored in the frame of the edge before it, so the corner of a
-//!   building or the bend of a road leaves one component close to zero. The frame is
-//!   integer arithmetic only, see [`Frame`].
+//! - every other vertex is guessed as the vertex before it.
 //!
 //! Neighbouring polygons share borders and roads share junctions, so a stretch of vertices
 //! that an earlier ring or line already holds is stored as a copy of it, forwards or backwards.
@@ -29,9 +27,6 @@ use crate::{Decoder, MltError, MltResult};
 
 /// Bit 0 of the flags byte: a copy-operations block follows.
 const FLAG_COPIES: u8 = 1;
-/// Bit 1 of the flags byte: edges are stored in the frame of the edge before them.
-/// Frames make the residuals smaller and cost the decoder about as much again as the rest.
-const FLAG_FRAMES: u8 = 2;
 /// Bit 2 of the flags byte: a ring or line starts near the last vertex of the run before it,
 /// instead of near its first vertex. Pays off where lines are stored as chained segments.
 const FLAG_FROM_END: u8 = 4;
@@ -126,116 +121,6 @@ fn is_point(t: GeometryType) -> bool {
     matches!(t, GeometryType::Point | GeometryType::MultiPoint)
 }
 
-/// Sub-directions per 45 degrees the frame of an edge is rounded to.
-const FRAME_STEPS: usize = 16;
-
-/// `round(tan((k + 1/2) * pi / 64) * 2^16)`: where the edge direction rounds up to sub-direction `k + 1`.
-const FRAME_THRESHOLDS: [i64; FRAME_STEPS] = [
-    1609, 4834, 8083, 11372, 14717, 18136, 21650, 25280, 29050, 32988, 37126, 41500, 46156, 51145,
-    56532, 62395,
-];
-/// `round(tan(k * pi / 128) * 2^16)`: the first and last shear of sub-direction `k`.
-const FRAME_TAN_HALF: [i64; FRAME_STEPS + 1] = [
-    0, 1609, 3220, 4834, 6455, 8083, 9721, 11372, 13036, 14717, 16416, 18136, 19880, 21650, 23449,
-    25280, 27146,
-];
-/// `round(sin(k * pi / 64) * 2^16)`: the middle shear of sub-direction `k`.
-const FRAME_SIN: [i64; FRAME_STEPS + 1] = [
-    0, 3216, 6424, 9616, 12785, 15924, 19024, 22078, 25080, 28020, 30893, 33692, 36410, 39040,
-    41576, 44011, 46341,
-];
-
-/// The frame of an edge `u`: an exact rotation that turns `u` to within 0.7 degrees of the
-/// positive x axis, so a residual measured in it says how far a vertex runs along and across
-/// the edge before it.
-///
-/// The rotation is quarter turns, then a turn by the nearest of 128 directions made of three
-/// fixed-point shears (lifting). Lifting maps integers to integers and is undone exactly
-/// whatever its constants, and the constants are the integer tables above, so the frame is
-/// pure integer arithmetic: every platform computes the same bits, and every product stays
-/// below 2^53, so a `Number` in JavaScript holds it exactly.
-#[derive(Clone, Copy)]
-struct Frame {
-    /// Clockwise quarter turns that bring `u` within 45 degrees of the positive x axis:
-    /// 0 when it leans to `+x`, 1 to `+y`, 2 to `-x`, 3 to `-y`, leaning to `x` on a tie.
-    quarters: u8,
-    /// The shears turning by minus the sub-direction's angle.
-    t: i64,
-    s: i64,
-}
-
-/// `floor((k * v + 2^15) / 2^16)`, one fixed-point shear.
-#[inline]
-fn shear(k: i64, v: i64) -> i64 {
-    (k * v + 0x8000) >> 16
-}
-
-impl Frame {
-    /// Branch-free: the quarter turns come from which axis `u` leans to (`x` on a tie) and
-    /// its sign, and the sub-direction from how many thresholds the slope reaches.
-    fn of(u: (i64, i64)) -> Option<Self> {
-        if u == (0, 0) {
-            return None;
-        }
-        let (a0, b0) = u;
-        let quarters: u8 = match (b0.abs() > a0.abs(), a0 > 0, b0 > 0) {
-            (false, true, _) => 0,
-            (true, _, true) => 1,
-            (false, false, _) => 2,
-            (true, _, false) => 3,
-        };
-        let (a, b) = quarter_turns(quarters, u);
-        let slope = b.abs() << 16;
-        let k = FRAME_THRESHOLDS
-            .iter()
-            .map(|&t| usize::from(slope >= a * t))
-            .sum::<usize>();
-        let sign = if b < 0 { -1 } else { 1 };
-        Some(Self {
-            quarters,
-            t: sign * FRAME_TAN_HALF[k],
-            s: sign * FRAME_SIN[k],
-        })
-    }
-
-    fn forward(self, d: (i64, i64)) -> (i64, i64) {
-        let (x, y) = quarter_turns(self.quarters, d);
-        let x1 = x + shear(self.t, y);
-        let y2 = y - shear(self.s, x1);
-        (x1 + shear(self.t, y2), y2)
-    }
-
-    fn inverse(self, (x3, y2): (i64, i64)) -> (i64, i64) {
-        let x1 = x3 - shear(self.t, y2);
-        let y = y2 + shear(self.s, x1);
-        let x = x1 - shear(self.t, y);
-        quarter_turns((4 - self.quarters) % 4, (x, y))
-    }
-}
-
-/// `(x, y)` turned clockwise by `q` quarter turns.
-#[inline]
-fn quarter_turns(q: u8, (x, y): (i64, i64)) -> (i64, i64) {
-    match q {
-        0 => (x, y),
-        1 => (y, -x),
-        2 => (-x, -y),
-        _ => (-y, x),
-    }
-}
-
-/// `d` measured in the frame of the edge `u`; an edge of length zero has no frame.
-#[inline]
-fn rotate(u: (i64, i64), d: (i64, i64)) -> (i64, i64) {
-    Frame::of(u).map_or(d, |f| f.forward(d))
-}
-
-/// The inverse of [`rotate`].
-#[inline]
-fn unrotate(u: (i64, i64), r: (i64, i64)) -> (i64, i64) {
-    Frame::of(u).map_or(r, |f| f.inverse(r))
-}
-
 type Xy = (i64, i64);
 
 fn at(v: &[i32], i: usize) -> Xy {
@@ -262,8 +147,7 @@ fn class(kind: RunKind, len: usize, i: usize) -> usize {
 }
 
 /// The residual of vertex `i` of the run starting at vertex `s`, given every vertex before it.
-/// `prev` is the vertex before the run, `prev_start` the first vertex of the run before it.
-#[expect(clippy::too_many_arguments)]
+/// `prev` is the vertex before the run, `start_guess` where the run is guessed to start.
 fn residual(
     v: &[i32],
     s: usize,
@@ -271,22 +155,19 @@ fn residual(
     kind: RunKind,
     i: usize,
     prev: Xy,
-    prev_start: Xy,
-    frames: bool,
+    start_guess: Xy,
 ) -> (usize, Xy) {
     let p = at(v, s + i);
     if i == 0 {
         return match kind {
             RunKind::Point => (POINT, sub(p, prev)),
-            RunKind::Line | RunKind::Ring => (START, sub(p, prev_start)),
+            RunKind::Line | RunKind::Ring => (START, sub(p, start_guess)),
         };
     }
     let c = class(kind, len, i);
-    let d = sub(p, at(v, s + i - 1));
     let r = match c {
         CORNER => sub(p, sub(add(at(v, s), at(v, s + 2)), at(v, s + 1))),
-        RING | LINE if frames && i >= 2 => rotate(sub(at(v, s + i - 1), at(v, s + i - 2)), d),
-        _ => d,
+        _ => sub(p, at(v, s + i - 1)),
     };
     (c, r)
 }
@@ -465,10 +346,10 @@ fn step(k: usize, backwards: bool, written: usize, run: (usize, usize, bool)) ->
     (next < written).then_some(next)
 }
 
-/// Encode `vertices`, `(x, y)` words laid out as `runs`, with or without frames, guessing the
-/// start of each ring or line from the start or `from_end` the end of the run before it.
+/// Encode `vertices`, `(x, y)` words laid out as `runs`, guessing the start of each ring or
+/// line from the start or `from_end` the end of the run before it.
 #[must_use]
-pub fn encode(vertices: &[i32], runs: &[Run], frames: bool, from_end: bool) -> Vec<u8> {
+pub fn encode(vertices: &[i32], runs: &[Run], from_end: bool) -> Vec<u8> {
     let mut planes: [Planes; CLASSES] = Default::default();
     let mut ops = Vec::new();
     let mut any_copy = false;
@@ -497,7 +378,7 @@ pub fn encode(vertices: &[i32], runs: &[Run], frames: bool, from_end: bool) -> V
                 continue;
             }
             let start_guess = if from_end { prev } else { prev_start };
-            let (c, r) = residual(vertices, s, len, kind, i, prev, start_guess, frames);
+            let (c, r) = residual(vertices, s, len, kind, i, prev, start_guess);
             planes[c].push_xy(r);
             remember(vertices, s + i, &mut index);
             i += 1;
@@ -519,9 +400,7 @@ pub fn encode(vertices: &[i32], runs: &[Run], frames: bool, from_end: bool) -> V
         }
         s += len;
     }
-    let flags = if any_copy { FLAG_COPIES } else { 0 }
-        | if frames { FLAG_FRAMES } else { 0 }
-        | if from_end { FLAG_FROM_END } else { 0 };
+    let flags = if any_copy { FLAG_COPIES } else { 0 } | if from_end { FLAG_FROM_END } else { 0 };
     let mut out = vec![flags];
     if any_copy {
         put_varint(ops.len() as u64, &mut out);
@@ -638,11 +517,6 @@ pub fn decode(
     vertex_count: usize,
     dec: &mut Decoder,
 ) -> MltResult<Vec<i32>> {
-    if !cfg!(feature = "predicted") {
-        return Err(MltError::NotImplemented(
-            "predicted vertex decoding, which this build leaves out",
-        ));
-    }
     let words = vertex_count
         .checked_mul(2)
         .ok_or(MltError::MalformedPredicted("vertex count overflow"))?;
@@ -652,10 +526,9 @@ pub fn decode(
         .split_first()
         .ok_or(MltError::MalformedPredicted("empty payload"))?;
     input.data = rest;
-    if flags & !(FLAG_COPIES | FLAG_FRAMES | FLAG_FROM_END) != 0 {
+    if flags & !(FLAG_COPIES | FLAG_FROM_END) != 0 {
         return Err(MltError::MalformedPredicted("reserved flag bits set"));
     }
-    let frames = flags & FLAG_FRAMES != 0;
     let from_end = flags & FLAG_FROM_END != 0;
     let mut ops = Cursor { data: &[] };
     if flags & FLAG_COPIES != 0 {
@@ -762,13 +635,9 @@ pub fn decode(
             } else {
                 let c = class(kind, len, i);
                 let r = next_pair(&residuals[c], &mut cursors[c])?;
-                let last = at(&v, w - 1);
                 match c {
                     CORNER => add(r, sub(add(at(&v, s), at(&v, s + 2)), at(&v, s + 1))),
-                    RING | LINE if frames && i >= 2 => {
-                        add(last, unrotate(sub(last, at(&v, w - 2)), r))
-                    }
-                    _ => add(last, r),
+                    _ => add(at(&v, w - 1), r),
                 }
             };
             v[2 * w] = word(p.0)?;
@@ -814,67 +683,47 @@ mod tests {
     use super::*;
 
     fn round_trip(vertices: &[i32], runs: &[Run]) {
-        for frames in [false, true] {
-            for from_end in [false, true] {
-                let encoded = encode(vertices, runs, frames, from_end);
-                let decoded = decode(
-                    &encoded,
-                    runs,
-                    vertices.len() / 2,
-                    &mut Decoder::with_max_size(u32::MAX),
-                )
-                .expect("decodes");
-                assert_eq!(decoded, vertices, "frames: {frames}, from_end: {from_end}");
-            }
+        for from_end in [false, true] {
+            let encoded = encode(vertices, runs, from_end);
+            let decoded = decode(
+                &encoded,
+                runs,
+                vertices.len() / 2,
+                &mut Decoder::with_max_size(u32::MAX),
+            )
+            .expect("decodes");
+            assert_eq!(decoded, vertices, "from_end: {from_end}");
         }
     }
 
+    /// The example of the specification, byte for byte.
     #[test]
-    fn frame_is_exact() {
-        for u in [
-            (1, 0),
-            (0, 1),
-            (-3, 4),
-            (5, -12),
-            (-7, -7),
-            (123_456, -98_765),
-            (-1, 0),
-            (0, -1),
-            (1 << 32, -(1 << 32) + 1),
-        ] {
-            let f = Frame::of(u).unwrap();
-            for d in [
-                (0, 0),
-                (10, -3),
-                (-2000, 4000),
-                (1 << 32, -(1 << 32)),
-                (7, 7),
-            ] {
-                assert_eq!(f.inverse(f.forward(d)), d, "u={u:?} d={d:?}");
-            }
-            // The frame is rounded to one of 128 directions, so the edge lands within 0.71 degrees of +x.
-            let along = f.forward(u);
-            #[expect(clippy::cast_precision_loss)]
-            let len = (u.0 as f64).hypot(u.1 as f64);
-            #[expect(clippy::cast_precision_loss)]
-            let off = along.1.abs() as f64;
-            assert!(
-                along.0 > 0 && off <= len * 0.0135 + 2.0,
-                "u={u:?} -> {along:?}"
-            );
-        }
+    fn decodes_the_example_of_the_specification() {
+        let payload = [
+            0x00, // flags
+            0x05, 0x04, 0x14, 0x14, 0x13, 0x13, // Start
+            0x01, 0x00, // Point
+            0x05, 0x04, 0x14, 0x00, 0x00, 0x14, // Ring
+            0x03, 0x02, 0x00, 0x00, // Corner
+            0x03, 0x02, 0x0A, 0x00, // Line1
+            0x03, 0x02, 0x0A, 0x02, // Line
+        ];
+        let runs = [(4, RunKind::Ring), (3, RunKind::Line)];
+        let vertices = [10, 10, 20, 10, 20, 20, 10, 20, 0, 0, 5, 0, 10, 1];
+        assert_eq!(
+            decode(&payload, &runs, 7, &mut Decoder::with_max_size(u32::MAX)).unwrap(),
+            vertices
+        );
+        assert_eq!(encode(&vertices, &runs, false), payload);
     }
 
     #[test]
-    fn axis_aligned_frames_are_quarter_turns() {
-        for (u, d, r) in [
-            ((5, 0), (3, -7), (3, -7)),
-            ((-5, 0), (3, -7), (-3, 7)),
-            ((0, 5), (3, -7), (-7, -3)),
-            ((0, -5), (3, -7), (7, 3)),
-        ] {
-            assert_eq!(rotate(u, d), r, "u={u:?} d={d:?}");
-            assert_eq!(unrotate(u, r), d, "u={u:?} d={d:?}");
+    fn rejects_the_reserved_flag_bits() {
+        let runs = [(2, RunKind::Line)];
+        let mut encoded = encode(&[1, 2, 3, 4], &runs, false);
+        for bit in [1, 3, 4, 5, 6, 7] {
+            encoded[0] = 1 << bit;
+            assert!(decode(&encoded, &runs, 2, &mut Decoder::with_max_size(u32::MAX)).is_err());
         }
     }
 
@@ -896,10 +745,7 @@ mod tests {
             (1, RunKind::Point),
         ];
         round_trip(&vertices, &runs);
-        assert_eq!(
-            encode(&vertices, &runs, true, false)[0],
-            FLAG_COPIES | FLAG_FRAMES
-        );
+        assert_eq!(encode(&vertices, &runs, false)[0], FLAG_COPIES);
     }
 
     #[test]
@@ -917,8 +763,8 @@ mod tests {
             .collect();
         let runs = vec![(2, RunKind::Line); 40];
         round_trip(&vertices, &runs);
-        let from_start = encode(&vertices, &runs, false, false);
-        let from_end = encode(&vertices, &runs, false, true);
+        let from_start = encode(&vertices, &runs, false);
+        let from_end = encode(&vertices, &runs, true);
         assert_eq!(from_end[0], FLAG_FROM_END);
         // Every start lands on its guess, a zero byte per coordinate.
         #[expect(clippy::naive_bytecount, reason = "a short test payload")]
@@ -951,7 +797,7 @@ mod tests {
     fn rejects_trailing_bytes() {
         let vertices = [1, 2, 3, 4];
         let runs = [(2, RunKind::Line)];
-        let mut encoded = encode(&vertices, &runs, true, false);
+        let mut encoded = encode(&vertices, &runs, false);
         encoded.push(0);
         assert!(decode(&encoded, &runs, 2, &mut Decoder::with_max_size(u32::MAX)).is_err());
     }

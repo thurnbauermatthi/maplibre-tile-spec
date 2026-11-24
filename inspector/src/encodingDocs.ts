@@ -42,20 +42,16 @@ const BY_ID: Record<string, string> = {
   "float/rle": "encodings#boolean-rle",
   "int/delta-rle": "encodings#delta-rle",
   "str/delta-rle": "encodings#delta-rle",
-  "int/bit-packed": "encodings#bit-packing",
-  "str/bit-packed": "encodings#bit-packing",
   "vertex/componentwise-delta": "encodings#componentwise-delta",
   "vertex/morton": "encodings#morton",
   "vertex/morton-delta": "encodings#morton",
   "vertex/morton-rle": "encodings#morton",
-  "float/alp": "encodings#alp",
-  "float/dict": "encodings#float-dictionary",
+  "vertex/predicted": "encodings#predicted",
   "bytes/front-coded": "encodings#front-coding",
   // Physical, which carries no family.
   none: "encodings#physical-none",
   varint: "encodings#varint",
   fastpfor: "encodings#fastpfor",
-  "bit-packed": "encodings#bit-packing",
   // A string column's layout, from the extension bits.
   "layout/plain": "encodings#plain-bytes",
   "layout/dict": "encodings#string-dictionary",
@@ -108,7 +104,6 @@ const BY_LABEL: Record<string, Partial<Record<"v1" | "v2", string>>> = {
   num_values: { v1: "v1#encoding-byte", v2: "v2#value-count" },
   byte_length: { v1: "v1#encoding-byte", v2: "v2#byte-length" },
   present: { v1: "v1#column-metadata", v2: "v2#presence-nibble" },
-  shared_presence: { v2: "v2#shared-presence-fields" },
   coding: { v2: "v2#presence-encodings" },
   feature_count: { v1: "v1#column-data", v2: "v2#layer-body" },
   column_count: { v1: "v1#column-metadata", v2: "v2#column-counts" },
@@ -133,8 +128,6 @@ const BY_LABEL: Record<string, Partial<Record<"v1" | "v2", string>>> = {
   vertex_offsets: same("encodings#vertex-dictionary"),
   morton_bits: same("encodings#morton"),
   morton_shift: same("encodings#morton"),
-  alp_base: same("encodings#alp"),
-  alp_scale: same("encodings#alp"),
   z_step: { v2: "v2#z-coordinates" },
   shapes: { v2: "v2#nested-properties" },
   shape_ids: { v2: "v2#nested-properties" },
@@ -163,8 +156,6 @@ const BY_LABEL: Record<string, Partial<Record<"v1" | "v2", string>>> = {
 const CODEC_PARAMETERS = new Set([
   "morton_bits",
   "morton_shift",
-  "alp_base",
-  "alp_scale",
   "z_step",
 ]);
 
@@ -215,7 +206,7 @@ export function sectionsFor(
 /**
  * Looks an encoding id up, ignoring the variant a codec spells in brackets.
  *
- * A stream reports `fastpfor[128le]` where the page documents FastPFOR once: the block
+ * A stream reports `fastpfor[256be]` where the page documents FastPFOR once: the block
  * size and byte order pick a layout of the same codec, not another encoding.
  */
 export function docKeyFor(id: string): string | undefined {

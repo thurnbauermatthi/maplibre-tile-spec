@@ -104,27 +104,13 @@ fn parse_physical(encoding_byte: u8) -> MltResult<PhysicalEncoding> {
 }
 
 /// Assemble the encoding byte from its logical and physical fields.
-fn encoding_byte(logical: LogicalCombination, physical: PhysicalEncoding) -> MltResult<u8> {
+fn encoding_byte(logical: LogicalCombination, physical: PhysicalEncoding) -> u8 {
     let field = match physical {
         PhysicalEncoding::None => PhysicalField::None,
         PhysicalEncoding::FastPFor(FastPForKind::Block256Be) => PhysicalField::FastPFor256,
         PhysicalEncoding::VarInt => PhysicalField::VarInt,
-        #[cfg(feature = "unstable-v2")]
-        PhysicalEncoding::FastPFor(FastPForKind::Block128Le) => {
-            return Err(MltError::UnsupportedPhysicalEncodingForType(
-                physical,
-                "v1, whose FastPFor streams are 256-value big-endian blocks",
-            ));
-        }
-        #[cfg(feature = "unstable-v2")]
-        PhysicalEncoding::BitPacked => {
-            return Err(MltError::UnsupportedPhysicalEncodingForType(
-                physical,
-                "v1, which has no bit-packed streams",
-            ));
-        }
     };
-    Ok(logical as u8 | field as u8)
+    logical as u8 | field as u8
 }
 
 /// Parse the v1 `stream_type` byte: category in the high nibble, subtype in the low nibble.
@@ -301,29 +287,11 @@ pub(crate) fn write_stream_meta<W: io::Write>(
         LE::Int(IL::DeltaRle(_)) => LC::DeltaRle,
         LE::Vertex(VL::ComponentwiseDelta) => LC::ComponentwiseDelta,
         LE::Vertex(VL::MortonDelta(_)) => LC::MortonDelta,
-        LE::Float(FL::Dict | FL::Alp(_)) => {
-            return Err(UnsupportedLogicalEncoding(
-                meta.encoding.logical,
-                "v1, whose float columns are stored raw",
-            ));
-        }
         #[cfg(feature = "unstable-v2")]
         LE::Vertex(VL::Xyz(..)) => {
             return Err(UnsupportedLogicalEncoding(
                 meta.encoding.logical,
                 "v1, whose vertices are (x, y) pairs",
-            ));
-        }
-        LE::Int(IL::Delta2) | LE::Vertex(VL::ComponentwiseDelta2) => {
-            return Err(UnsupportedLogicalEncoding(
-                meta.encoding.logical,
-                "v1, which has no second-order deltas",
-            ));
-        }
-        LE::Vertex(VL::Rans) => {
-            return Err(UnsupportedLogicalEncoding(
-                meta.encoding.logical,
-                "v1, which has no rANS vertex coding",
             ));
         }
         LE::Vertex(VL::Predicted) => {
@@ -332,14 +300,8 @@ pub(crate) fn write_stream_meta<W: io::Write>(
                 "v1, which has no predicted vertex coding",
             ));
         }
-        LE::Bool(BL::Runs | BL::Sparse) => {
-            return Err(UnsupportedLogicalEncoding(
-                meta.encoding.logical,
-                "v1, whose bool streams are bitmaps or byte-RLE",
-            ));
-        }
     };
-    writer.write_u8(encoding_byte(logical, meta.encoding.physical)?)?;
+    writer.write_u8(encoding_byte(logical, meta.encoding.physical))?;
     writer.write_varint(meta.num_words()?)?;
     writer.write_varint(byte_length)?;
 
@@ -386,8 +348,7 @@ pub(crate) fn write_stream_meta<W: io::Write>(
         // Rejected before the header is written.
         #[cfg(feature = "unstable-v2")]
         LE::Vertex(VL::Xyz(..)) => {}
-        LE::Int(IL::Delta2) | LE::Vertex(VL::ComponentwiseDelta2 | VL::Rans | VL::Predicted) => {}
-        LE::Bool(BL::Runs | BL::Sparse) => {}
+        LE::Vertex(VL::Predicted) => {}
     }
     Ok(())
 }
@@ -692,64 +653,15 @@ mod tests {
     }
 
     #[test]
-    fn write_rejects_a_float_dictionary() {
+    fn write_rejects_predicted_vertices() {
         let meta = meta(
             DATA,
-            LogicalEncoding::Float(FloatLogical::Dict),
-            PhysicalEncoding::VarInt,
-            5,
+            LogicalEncoding::Vertex(VertexLogical::Predicted),
+            PhysicalEncoding::None,
+            4,
         );
         let err = write_stream_meta(&meta, &mut Vec::new(), false, 0).unwrap_err();
-        insta::assert_snapshot!(err, @"unsupported logical encoding Float(Dict) for v1, whose float columns are stored raw");
-    }
-
-    #[rstest]
-    #[case::delta2(
-        LogicalEncoding::Int(IntLogical::Delta2),
-        "unsupported logical encoding Int(Delta2) for v1, which has no second-order deltas"
-    )]
-    #[case::componentwise_delta2(
-        LogicalEncoding::Vertex(VertexLogical::ComponentwiseDelta2),
-        "unsupported logical encoding Vertex(ComponentwiseDelta2) for v1, which has no second-order deltas"
-    )]
-    #[case::rans(
-        LogicalEncoding::Vertex(VertexLogical::Rans),
-        "unsupported logical encoding Vertex(Rans) for v1, which has no rANS vertex coding"
-    )]
-    #[case::runs(
-        LogicalEncoding::Bool(BoolLogical::Runs),
-        "unsupported logical encoding Bool(Runs) for v1, whose bool streams are bitmaps or byte-RLE"
-    )]
-    #[case::sparse(
-        LogicalEncoding::Bool(BoolLogical::Sparse),
-        "unsupported logical encoding Bool(Sparse) for v1, whose bool streams are bitmaps or byte-RLE"
-    )]
-    fn write_rejects_a_v2_logical_encoding(
-        #[case] logical: LogicalEncoding,
-        #[case] expected: &str,
-    ) {
-        let meta = meta(DATA, logical, PhysicalEncoding::VarInt, 4);
-        let err = write_stream_meta(&meta, &mut Vec::new(), false, 0).unwrap_err();
-        assert_eq!(err.to_string(), expected);
-    }
-
-    #[cfg(feature = "unstable-v2")]
-    #[rstest]
-    #[case::fastpfor_128le(
-        PhysicalEncoding::FastPFor(FastPForKind::Block128Le),
-        "unsupported physical encoding: FastPFor(Block128Le) for v1, whose FastPFor streams are 256-value big-endian blocks"
-    )]
-    #[case::bit_packed(
-        PhysicalEncoding::BitPacked,
-        "unsupported physical encoding: BitPacked for v1, which has no bit-packed streams"
-    )]
-    fn write_rejects_a_v2_physical_encoding(
-        #[case] physical: PhysicalEncoding,
-        #[case] expected: &str,
-    ) {
-        let meta = meta(DATA, LogicalEncoding::Int(IntLogical::None), physical, 5);
-        let err = write_stream_meta(&meta, &mut Vec::new(), false, 0).unwrap_err();
-        assert_eq!(err.to_string(), expected);
+        insta::assert_snapshot!(err, @"unsupported logical encoding Vertex(Predicted) for v1, which has no predicted vertex coding");
     }
 
     #[test]

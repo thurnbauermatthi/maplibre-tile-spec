@@ -394,7 +394,7 @@ fn a_null_list_element_keeps_its_place() {
 }
 
 #[test]
-fn a_nested_root_shares_a_bitfield_with_a_flat_column() {
+fn a_nested_root_and_a_flat_column_each_carry_a_bitfield() {
     let mut builder = TileLayer::builder("nested", 4096).expect("builder");
     let flat = builder
         .add_property("flat", PropKind::I32)
@@ -418,13 +418,6 @@ fn a_nested_root_shares_a_bitfield_with_a_flat_column() {
     let bytes = assert_round_trips_as_v2(&layer);
 
     let tree = annotate(&bytes);
-    let shared: Vec<&str> = tree
-        .regions
-        .iter()
-        .map(|r| r.label.as_str())
-        .filter(|label| *label == "present[0]" || *label == "present[1]")
-        .collect();
-    assert_eq!(shared, vec!["present[0]"]);
     let nibbles: Vec<String> = tree
         .regions
         .iter()
@@ -434,8 +427,8 @@ fn a_nested_root_shares_a_bitfield_with_a_flat_column() {
     assert_eq!(
         nibbles,
         vec![
-            "presence = Shared(0)".to_string(),
-            "presence = Shared(0)".to_string(),
+            "presence = Inline(Bitmap)".to_string(),
+            "presence = Inline(Bitmap)".to_string(),
             "node presence = AllPresent".to_string(),
         ]
     );

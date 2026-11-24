@@ -9,7 +9,7 @@ use crate::codecs::front_coding::front_code;
 use crate::codecs::fsst::{compress_fsst_bytes, compress_fsst_with};
 use crate::decoder::stream::header02::{Count02, Family, StrLayout, WordWidth};
 use crate::decoder::{Column02, ColumnType02, DataType02, DictLayout, Presence02, SharedDictKind};
-use crate::encoder::encode02::{SharedPresence, write_inline_presence};
+use crate::encoder::encode02::{PresenceCodings, write_inline_presence};
 use crate::encoder::model::{StrAt, StreamCtx};
 use crate::encoder::property::shared_dict::collect_staged_shared_dict_spans;
 use crate::encoder::property::strings::{
@@ -31,13 +31,13 @@ struct Grouped<'a> {
 impl Codecs {
     /// Encode a shared-dictionary property as a v2 column and write it to `enc`.
     ///
-    /// Four shapes are raced on stored bytes: the corpus plain or FSST-compressed, each with the
-    /// dictionary front coded or not.
+    /// Four shapes are raced: the corpus plain or FSST-compressed, each with the dictionary front
+    /// coded or not.
     #[hotpath::measure]
     pub(crate) fn write_shared_dict02(
         &mut self,
         shared_dict: &StagedSharedDict,
-        shared: &SharedPresence,
+        codings: PresenceCodings,
         enc: &mut Encoder,
     ) -> MltResult<()> {
         let plain = group(shared_dict)?;
@@ -62,13 +62,13 @@ impl Codecs {
         alt.with(|enc| {
             begin_shared_dict02(enc, SharedDictKind::Plain, shared_dict)?;
             write_dict_tail02(&plain.entries, StrAt::flat(name), enc, self)?;
-            write_children02(shared_dict, &plain.codes, features, shared, enc, self)
+            write_children02(shared_dict, &plain.codes, features, codings, enc, self)
         })?;
         alt.with(|enc| {
             begin_shared_dict02(enc, SharedDictKind::Plain, shared_dict)?;
             write_front_lengths02(&front, StrAt::flat(name), enc, self)?;
             write_blob02(&front.suffixes, DictLayout::FrontCoded, enc)?;
-            write_children02(shared_dict, &sorted_codes, features, shared, enc, self)
+            write_children02(shared_dict, &sorted_codes, features, codings, enc, self)
         })?;
         if let Some(ref raw) = fsst {
             alt.with(|enc| {
@@ -76,7 +76,7 @@ impl Codecs {
                 let ctx = StreamCtx::prop(StreamType::Length(LengthType::Dictionary), name);
                 self.write_int_stream(&raw.value_lengths, &ctx, enc)?;
                 write_fsst_tail02(&raw.blob, DictLayout::Plain, StrAt::flat(name), enc, self)?;
-                write_children02(shared_dict, &plain.codes, features, shared, enc, self)
+                write_children02(shared_dict, &plain.codes, features, codings, enc, self)
             })?;
         }
         if let Some(ref blob) = front_fsst {
@@ -84,7 +84,7 @@ impl Codecs {
                 begin_shared_dict02(enc, SharedDictKind::Fsst, shared_dict)?;
                 write_front_lengths02(&front, StrAt::flat(name), enc, self)?;
                 write_fsst_tail02(blob, DictLayout::FrontCoded, StrAt::flat(name), enc, self)?;
-                write_children02(shared_dict, &sorted_codes, features, shared, enc, self)
+                write_children02(shared_dict, &sorted_codes, features, codings, enc, self)
             })?;
         }
         Ok(())
@@ -153,7 +153,7 @@ fn write_children02(
     shared_dict: &StagedSharedDict,
     per_child_codes: &[Vec<u32>],
     features: Count02,
-    shared: &SharedPresence,
+    codings: PresenceCodings,
     enc: &mut Encoder,
     codecs: &mut Codecs,
 ) -> MltResult<()> {
@@ -161,7 +161,7 @@ fn write_children02(
         let presence = item.optional_presence();
         let where_ = presence
             .as_ref()
-            .map_or(Presence02::AllPresent, |mask| shared.nibble_for(mask));
+            .map_or(Presence02::AllPresent, |mask| codings.nibble_for(mask));
         let data = enc.data_mut();
         data.push(ColumnType02::new(where_, DataType02::Str).to_byte());
         data.write_string(&item.suffix)?;

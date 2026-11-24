@@ -251,7 +251,7 @@ export const AXES: Axis[] = [
     key: "physical",
     label: "physical",
     section: "Streams",
-    vocabulary: ["varint", "bit-packed", "fastpfor[256be]", "fastpfor[128le]"],
+    vocabulary: ["varint", "fastpfor[256be]"],
     of: field("physical"),
   },
   {
@@ -266,9 +266,7 @@ export const AXES: Axis[] = [
       "morton",
       "morton-delta",
       "morton-rle",
-      "dict",
-      "alp",
-      "rans",
+      "predicted",
     ],
     of: field("logical"),
   },
@@ -354,7 +352,7 @@ export interface VocabHit {
 }
 
 /**
- * Axis values whose name contains `needle`, so typing `alp` or `front` offers the chip
+ * Axis values whose name contains `needle`, so typing `predicted` or `front` offers the chip
  * rather than searching a thousand file names for a word that is not in any of them.
  */
 export function searchVocabulary(

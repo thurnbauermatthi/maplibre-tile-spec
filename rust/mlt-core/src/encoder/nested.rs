@@ -74,12 +74,6 @@ impl StagedNested {
     pub fn name(&self) -> &str {
         &self.name
     }
-
-    /// The column's presence over features, or [`None`] when every feature has a value.
-    #[must_use]
-    pub(crate) fn presence(&self) -> Option<&Vec<bool>> {
-        self.root.presence()
-    }
 }
 
 impl StagedStruct {

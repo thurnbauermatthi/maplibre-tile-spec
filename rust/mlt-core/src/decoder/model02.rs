@@ -379,52 +379,34 @@ impl SharedDictKind {
 /// Where a v2 column's presence bits live and how they are coded, the high nibble
 /// of the column type byte.
 ///
-/// Nibble `0` says there are none; `1`-`3` name a [`PresenceCoding`] the column
-/// carries itself; `4`-`10` point at one of the layer's shared bitfields; `11`-`15`
-/// are reserved.
+/// Nibble `0` says there are none; `1`-`2` name the [`PresenceCoding`] of the bits the
+/// column carries; `3`-`15` are reserved.
 ///
 /// The coding rides in the nibble rather than in a byte of its own because the
 /// bitmap is still the right answer for most columns, and a tag byte would charge
-/// every one of those for the two that are not.
+/// every one of those for the one that is not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Presence02 {
     /// Every feature has a value and nothing is stored.
     AllPresent,
     /// The column carries its own presence bits, in this coding, after its name.
     Inline(PresenceCoding),
-    /// The column reads the layer's shared presence bitfield at this index, so
-    /// columns that are null on the same features store one bitfield between them.
-    /// See [`LayerLayout::shared_presence`].
-    Shared(u8),
 }
 
 impl Presence02 {
     /// Nibble of [`Self::AllPresent`], already shifted into place.
     const ALL_PRESENT: u8 = 0b0000_0000;
 
-    /// Nibble of `Shared(0)`; `Shared(i)` is this plus `i << 4`.
-    const SHARED_BASE: u8 = 0b0100_0000;
-
-    /// Read a masked presence nibble against a layer that stores `shared_count`
-    /// shared bitfields.
-    ///
-    /// Returns [`None`] for a reference past the last bitfield the layer declared,
-    /// which is unreadable.
+    /// Read a masked presence nibble, or [`None`] for a reserved one.
     #[must_use]
-    pub(crate) fn parse(nibble: u8, shared_count: u8) -> Option<Self> {
+    pub(crate) fn parse(nibble: u8) -> Option<Self> {
         match nibble {
             Self::ALL_PRESENT => Some(Self::AllPresent),
-            _ if nibble < Self::SHARED_BASE => {
-                PresenceCoding::from_code((nibble >> 4) - 1).map(Self::Inline)
-            }
-            _ => {
-                let index = (nibble - Self::SHARED_BASE) >> 4;
-                (index < shared_count).then_some(Self::Shared(index))
-            }
+            _ => PresenceCoding::from_code((nibble >> 4) - 1).map(Self::Inline),
         }
     }
 
-    /// Whether some features may be null, whichever bitfield holds the answer.
+    /// Whether some features may be null.
     #[must_use]
     pub(crate) fn is_optional(self) -> bool {
         !matches!(self, Self::AllPresent)
@@ -435,10 +417,6 @@ impl Presence02 {
         match self {
             Self::AllPresent => Self::ALL_PRESENT,
             Self::Inline(coding) => (coding as u8 + 1) << 4,
-            Self::Shared(index) => {
-                debug_assert!(index < LayerLayout::MAX_SHARED_PRESENCE);
-                Self::SHARED_BASE + (index << 4)
-            }
         }
     }
 }
@@ -470,15 +448,11 @@ impl ColumnType02 {
     }
 
     /// Split a wire byte into its two fields, rejecting reserved bit patterns.
-    ///
-    /// `shared_count` is [`LayerLayout::shared_presence`] of the enclosing layer,
-    /// so a column pointing past the last shared bitfield is rejected here rather
-    /// than resolved to a missing one later.
-    pub(crate) fn parse(byte: u8, shared_count: u8) -> MltResult<Self> {
+    pub(crate) fn parse(byte: u8) -> MltResult<Self> {
         let err = || MltError::ParsingColumnType(byte);
         let (presence, data) = Self::fields(byte);
         let data = DataType02::try_from(data).map_err(|_| err())?;
-        let presence = Presence02::parse(presence, shared_count).ok_or_else(err)?;
+        let presence = Presence02::parse(presence).ok_or_else(err)?;
         Ok(Self { presence, data })
     }
 
@@ -560,8 +534,8 @@ impl ValuesColumn02 {
     ///
     /// An id belongs to a feature rather than a vertex, and a shared dictionary
     /// introduces counted columns, which the m-value section does not hold.
-    pub(crate) fn parse_m_value(byte: u8, shared_count: u8) -> MltResult<Self> {
-        match ColumnType02::parse(byte, shared_count)?.split() {
+    pub(crate) fn parse_m_value(byte: u8) -> MltResult<Self> {
+        match ColumnType02::parse(byte)?.split() {
             ColumnKind02::Values(column) => Ok(column),
             ColumnKind02::Id(_) | ColumnKind02::Nested(_) => Err(MltError::ParsingColumnType(byte)),
         }
@@ -590,9 +564,7 @@ impl Column02 {
     pub(crate) const SHARED_DICT: u8 = 0x0F;
 
     /// Read a wire byte in the terms of the shape its data type nibble names.
-    ///
-    /// `shared_count` is [`LayerLayout::shared_presence`] of the enclosing layer.
-    pub(crate) fn parse(byte: u8, shared_count: u8) -> MltResult<Self> {
+    pub(crate) fn parse(byte: u8) -> MltResult<Self> {
         let err = || MltError::ParsingColumnType(byte);
         let (high, data) = ColumnType02::fields(byte);
         if data == Self::SHARED_DICT {
@@ -600,7 +572,7 @@ impl Column02 {
                 .map(Self::SharedDict)
                 .ok_or_else(err);
         }
-        ColumnType02::parse(byte, shared_count).map(Self::Values)
+        ColumnType02::parse(byte).map(Self::Values)
     }
 }
 
@@ -940,88 +912,48 @@ impl LayerHeader02 {
     }
 }
 
-/// The v2 layer layout byte: the shared coding flag in bit 7, the shared presence
-/// bitfield count in bits 6-4, [`GeoLayout`] in bits 3-0.
+/// The v2 layer layout byte: reserved bits 7-4, which MUST be `0`, and [`GeoLayout`] in bits 3-0.
 ///
-/// It sits at the layer root, right after the layer header byte, and every
-/// bit of it is spent. Decoding resolves all three fields away, so a layer keeps
-/// the parsed byte for tools reporting on how a tile is stored.
+/// It sits at the layer root, right after the layer header byte. Decoding resolves it away,
+/// so a layer keeps the parsed byte for tools reporting on how a tile is stored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LayerLayout {
-    /// How many shared presence bitfields the layer stores, at most 7.
-    ///
-    /// The bitfields themselves follow this byte immediately, before the geometry
-    /// section, in index order. Columns read one through their shared presence
-    /// nibble, so a set of columns that are null on the same features pays for one
-    /// bitfield rather than one each.
-    pub shared_presence: u8,
-    /// Whether each shared bitfield leads with the byte naming its presence coding.
-    /// Without it every shared bitfield is a plain bitmap.
-    pub shared_coded: bool,
     /// Which streams the geometry section holds, and in what order.
     pub geometry: GeoLayout,
 }
 
 impl LayerLayout {
-    /// Bit of the byte saying the shared bitfields carry their coding.
-    pub(crate) const SHARED_CODED_BIT: u8 = 0b1000_0000;
-
-    /// Mask of the byte holding the shared presence column count.
-    pub(crate) const SHARED_PRESENCE_MASK: u8 = 0b0111_0000;
+    /// Mask of the reserved bits.
+    pub(crate) const RESERVED_MASK: u8 = 0b1111_0000;
 
     /// Mask of the byte holding the [`GeoLayout`].
     pub(crate) const GEO_LAYOUT_MASK: u8 = 0b0000_1111;
 
-    /// Largest shared presence column count a layer can use, which is all its
-    /// three bits can hold.
-    pub(crate) const MAX_SHARED_PRESENCE: u8 = 7;
-
     #[must_use]
-    pub(crate) fn new(geometry: GeoLayout, shared_presence: u8, shared_coded: bool) -> Self {
-        debug_assert!(shared_presence <= Self::MAX_SHARED_PRESENCE);
-        debug_assert!(shared_presence > 0 || !shared_coded);
-        Self {
-            shared_presence,
-            shared_coded,
-            geometry,
-        }
+    pub(crate) fn new(geometry: GeoLayout) -> Self {
+        Self { geometry }
     }
 
-    /// Split a wire byte into its three fields, without validating any.
+    /// Split a wire byte into its reserved bits and its geometry layout, without validating either.
     #[must_use]
-    pub(crate) fn fields(byte: u8) -> (bool, u8, u8) {
-        (
-            byte & Self::SHARED_CODED_BIT != 0,
-            (byte & Self::SHARED_PRESENCE_MASK) >> 4,
-            byte & Self::GEO_LAYOUT_MASK,
-        )
+    pub(crate) fn fields(byte: u8) -> (u8, u8) {
+        (byte & Self::RESERVED_MASK, byte & Self::GEO_LAYOUT_MASK)
     }
 
     /// Split a wire byte into its fields, rejecting reserved bit patterns.
     pub(crate) fn parse(byte: u8) -> MltResult<Self> {
-        let (shared_coded, shared_presence, geometry) = Self::fields(byte);
-        // A coding flag with no bitfield to code has a canonical spelling without it.
-        if shared_coded && shared_presence == 0 {
+        let (reserved, geometry) = Self::fields(byte);
+        if reserved != 0 {
             return Err(MltError::ParsingLayerLayout02(byte));
         }
         let geometry =
             GeoLayout::try_from(geometry).map_err(|_| MltError::ParsingGeoLayout(geometry))?;
-        Ok(Self {
-            shared_presence,
-            shared_coded,
-            geometry,
-        })
+        Ok(Self { geometry })
     }
 
     #[must_use]
     pub(crate) fn to_byte(self) -> u8 {
-        debug_assert!(self.shared_presence <= Self::MAX_SHARED_PRESENCE);
-        let coded = if self.shared_coded {
-            Self::SHARED_CODED_BIT
-        } else {
-            0
-        };
-        coded | (self.shared_presence << 4) | self.geometry as u8
+        self.geometry as u8
     }
 }
 
@@ -1072,9 +1004,6 @@ mod tests {
 
     use super::*;
 
-    /// Shared bitfield count of a layer that declares as many as the byte allows.
-    const ALL_SHARED: u8 = LayerLayout::MAX_SHARED_PRESENCE;
-
     fn parts_and_rings() -> Topology {
         Topology::PartsAndRings {
             parts: vec![1],
@@ -1095,21 +1024,18 @@ mod tests {
         Presence02::Inline(PresenceCoding::Bitmap),
         DataType02::F64
     )]
-    #[case::runs(0b0010_0101, Presence02::Inline(PresenceCoding::Runs), DataType02::I32)]
-    #[case::sparse(
-        0b0011_1010,
-        Presence02::Inline(PresenceCoding::Sparse),
-        DataType02::F64
+    #[case::byte_rle(
+        0b0010_0101,
+        Presence02::Inline(PresenceCoding::ByteRle),
+        DataType02::I32
     )]
     #[case::str(0b0000_1011, Presence02::AllPresent, DataType02::Str)]
-    #[case::first_shared(0b0100_0101, Presence02::Shared(0), DataType02::I32)]
-    #[case::last_shared(0b1010_1010, Presence02::Shared(6), DataType02::F64)]
     fn column_type_byte_roundtrip(
         #[case] byte: u8,
         #[case] presence: Presence02,
         #[case] data: DataType02,
     ) {
-        let typ = ColumnType02::parse(byte, ALL_SHARED).unwrap();
+        let typ = ColumnType02::parse(byte).unwrap();
         assert_eq!(typ, ColumnType02::new(presence, data));
         assert_eq!(typ.to_byte(), byte);
     }
@@ -1125,7 +1051,7 @@ mod tests {
     #[case::plain_shared_dict(0b0000_1111, Column02::SharedDict(SharedDictKind::Plain))]
     #[case::fsst_shared_dict(0b0001_1111, Column02::SharedDict(SharedDictKind::Fsst))]
     fn column_byte_names_the_shape_it_holds(#[case] byte: u8, #[case] column: Column02) {
-        assert_eq!(Column02::parse(byte, ALL_SHARED).unwrap(), column);
+        assert_eq!(Column02::parse(byte).unwrap(), column);
     }
 
     #[rstest]
@@ -1185,24 +1111,20 @@ mod tests {
     }
 
     #[rstest]
-    #[case::reserved_shared_dict_corpus(0b0010_1111, ALL_SHARED)]
-    #[case::shared_ref_past_declared_count_over_a_nested_root(0b1001_1100, 4)]
-    fn column_byte_rejects_unassigned(#[case] byte: u8, #[case] shared_count: u8) {
-        let err = Column02::parse(byte, shared_count).unwrap_err();
+    #[case::reserved_shared_dict_corpus(0b0010_1111)]
+    #[case::reserved_presence_over_a_nested_root(0b1001_1100)]
+    fn column_byte_rejects_unassigned(#[case] byte: u8) {
+        let err = Column02::parse(byte).unwrap_err();
         assert!(matches!(err, MltError::ParsingColumnType(b) if b == byte));
     }
 
     #[rstest]
-    #[case::shared_dict_is_not_a_data_type(0b0000_1111, ALL_SHARED)]
-    #[case::shared_ref_past_declared_count_over_a_nested_root(0b1001_1100, 4)]
-    #[case::shared_ref_past_declared_count(0b1001_0101, 3)]
-    #[case::shared_ref_one_past_the_last_bitfield(0b1011_0101, ALL_SHARED)]
-    #[case::reserved_shared_nibble(0b1111_0101, ALL_SHARED)]
-    #[case::shared_ref_without_shared_columns(0b0100_0101, 0)]
-    #[case::shared_ref_past_declared_count(0b0101_0101, 1)]
-    #[case::unassigned_inline_coding(0b0101_0101, 0)]
-    fn column_type_byte_rejects_unassigned(#[case] byte: u8, #[case] shared_count: u8) {
-        let err = ColumnType02::parse(byte, shared_count).unwrap_err();
+    #[case::shared_dict_is_not_a_data_type(0b0000_1111)]
+    #[case::first_reserved_presence(0b0011_0101)]
+    #[case::reserved_presence_over_a_nested_root(0b1001_1100)]
+    #[case::last_reserved_presence(0b1111_0101)]
+    fn column_type_byte_rejects_unassigned(#[case] byte: u8) {
+        let err = ColumnType02::parse(byte).unwrap_err();
         assert!(matches!(err, MltError::ParsingColumnType(b) if b == byte));
     }
 
@@ -1262,30 +1184,20 @@ mod tests {
     }
 
     #[rstest]
-    #[case::points(0b0000_0000, 0, false, GeoLayout::Points)]
-    #[case::multi_polygons(0b0000_1010, 0, false, GeoLayout::MultiPolygons)]
-    #[case::one_shared_presence(0b0001_0100, 1, false, GeoLayout::Lines)]
-    #[case::max_shared_presence(0b0111_0000, ALL_SHARED, false, GeoLayout::Points)]
-    #[case::one_coded_shared_presence(0b1001_0100, 1, true, GeoLayout::Lines)]
-    #[case::max_coded_shared_presence(0b1111_0110, ALL_SHARED, true, GeoLayout::MultiLines)]
-    fn layer_layout_byte_roundtrip(
-        #[case] byte: u8,
-        #[case] shared_presence: u8,
-        #[case] shared_coded: bool,
-        #[case] geometry: GeoLayout,
-    ) {
+    #[case::points(0b0000_0000, GeoLayout::Points)]
+    #[case::multi_polygons(0b0000_1010, GeoLayout::MultiPolygons)]
+    #[case::lines(0b0000_0100, GeoLayout::Lines)]
+    fn layer_layout_byte_roundtrip(#[case] byte: u8, #[case] geometry: GeoLayout) {
         let layout = LayerLayout::parse(byte).unwrap();
-        assert_eq!(
-            layout,
-            LayerLayout::new(geometry, shared_presence, shared_coded)
-        );
+        assert_eq!(layout, LayerLayout::new(geometry));
         assert_eq!(layout.to_byte(), byte);
     }
 
     #[rstest]
-    #[case::no_bitfield(0b1000_0000)]
-    #[case::no_bitfield_over_a_geo_layout(0b1000_1010)]
-    fn layer_layout_byte_rejects_a_coding_flag_with_nothing_to_code(#[case] byte: u8) {
+    #[case::low_reserved_bit(0b0001_0100)]
+    #[case::high_reserved_bit(0b1000_0000)]
+    #[case::every_reserved_bit(0b1111_0110)]
+    fn layer_layout_byte_rejects_its_reserved_bits(#[case] byte: u8) {
         let err = LayerLayout::parse(byte).unwrap_err();
         assert!(matches!(err, MltError::ParsingLayerLayout02(b) if b == byte));
     }
@@ -1293,10 +1205,10 @@ mod tests {
     #[rstest]
     #[case::bool(0b0000_0010, ValueType02::Bool)]
     #[case::opt_i32(0b0001_0101, ValueType02::I32)]
-    #[case::shared_f64(0b0100_1010, ValueType02::F64)]
+    #[case::rle_f64(0b0010_1010, ValueType02::F64)]
     #[case::str(0b0000_1011, ValueType02::Str)]
     fn m_value_type_byte_roundtrip(#[case] byte: u8, #[case] values: ValueType02) {
-        let column = ValuesColumn02::parse_m_value(byte, ALL_SHARED).unwrap();
+        let column = ValuesColumn02::parse_m_value(byte).unwrap();
         assert_eq!(column.values, values);
         assert_eq!(ColumnType02::from(column).to_byte(), byte);
     }
@@ -1310,14 +1222,7 @@ mod tests {
     #[case::list_root(0b0000_1101)]
     #[case::map_root(0b0000_1110)]
     fn m_value_type_byte_rejects_what_a_vertex_cannot_hold(#[case] byte: u8) {
-        let err = ValuesColumn02::parse_m_value(byte, ALL_SHARED).unwrap_err();
-        assert!(matches!(err, MltError::ParsingColumnType(b) if b == byte));
-    }
-
-    #[test]
-    fn an_m_value_column_cannot_name_a_bitfield_the_layer_lacks() {
-        let byte = 0b1001_0101;
-        let err = ValuesColumn02::parse_m_value(byte, 4).unwrap_err();
+        let err = ValuesColumn02::parse_m_value(byte).unwrap_err();
         assert!(matches!(err, MltError::ParsingColumnType(b) if b == byte));
     }
 
@@ -1393,7 +1298,7 @@ mod tests {
         #[case] byte: u8,
         #[case] root: Interior02,
     ) {
-        let typ = ColumnType02::parse(byte, ALL_SHARED).unwrap();
+        let typ = ColumnType02::parse(byte).unwrap();
         let ColumnKind02::Nested(column) = typ.split() else {
             panic!("expected a nested root")
         };
@@ -1442,11 +1347,20 @@ mod tests {
 
     #[rstest]
     #[case::unassigned_geo_layout(0b0000_1110)]
-    #[case::unassigned_geo_layout_with_shared(0b0010_1111)]
+    #[case::last_unassigned_geo_layout(0b0000_1111)]
     fn layer_layout_byte_rejects_unassigned_geo_layout(#[case] byte: u8) {
         let err = LayerLayout::parse(byte).unwrap_err();
         assert!(
             matches!(err, MltError::ParsingGeoLayout(b) if b == byte & LayerLayout::GEO_LAYOUT_MASK)
         );
+    }
+
+    #[rstest]
+    #[case::bit_4(0b0001_0000)]
+    #[case::bit_7(0b1000_0000)]
+    #[case::over_an_assigned_layout(0b0110_0010)]
+    fn layer_layout_byte_rejects_a_reserved_bit(#[case] byte: u8) {
+        let err = LayerLayout::parse(byte).unwrap_err();
+        assert!(matches!(err, MltError::ParsingLayerLayout02(b) if b == byte));
     }
 }

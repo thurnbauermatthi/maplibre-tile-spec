@@ -49,20 +49,17 @@ use usize_cast::IntoUsize as _;
 
 use crate::LazyParsed::Raw;
 use crate::MltError::{BufferUnderflow, MissingLayerName, TrailingLayerData};
-use crate::codecs::presence_coding::{self, PresenceCoding};
+use crate::codecs::presence_coding;
 use crate::codecs::varint::parse_varint;
 use crate::decoder::nested::parse_nested;
 use crate::decoder::stream::header02;
-use crate::decoder::stream::header02::{
-    Count02, HAS_EXPLICIT_COUNT, StrLayout, StreamCtx02, shared_coding,
-};
+use crate::decoder::stream::header02::{Count02, HAS_EXPLICIT_COUNT, StrLayout, StreamCtx02};
 use crate::decoder::{
     Column02, ColumnCounts, ColumnKind02, ColumnType02, DataType02, Decoder, DictLayout,
-    DictionaryType, FloatLogical, GeoLayout, GeoTypes, Id, IdWidth02, IndexBase, Layer01, Layer02,
-    LayerBytes, LayerHeader02, LayerLayout, LengthType, LogicalEncoding, MValues, Nested,
-    Presence02, RawFloats, RawFloatsEncoding, RawFsstData, RawGeometry, RawId, RawIdValue,
-    RawMValue, RawPlainData, RawPresence, RawProperty, RawScalar, RawSharedDict,
-    RawSharedDictEncoding, RawSharedDictItem, RawStream, RawStrings, RawStringsEncoding,
+    DictionaryType, GeoLayout, GeoTypes, Id, IdWidth02, IndexBase, Layer01, Layer02, LayerBytes,
+    LayerHeader02, LayerLayout, LengthType, MValues, Nested, Presence02, RawFloats, RawFsstData,
+    RawGeometry, RawId, RawIdValue, RawMValue, RawPlainData, RawPresence, RawProperty, RawScalar,
+    RawSharedDict, RawSharedDictEncoding, RawSharedDictItem, RawStrings, RawStringsEncoding,
     SharedDictKind, ValueType02, ValuesColumn02,
 };
 use crate::tile::{ColumnRole, Extent, reject_taken_name};
@@ -90,8 +87,7 @@ pub(crate) fn parse_layer02<'a>(
         return Err(MltError::MValuesNeedVertexCounts(layout.geometry.into()));
     }
 
-    // ── Shared presence bitfields ─────────────────────────────────────────
-    let (input, cols) = parse_shared_presence(input, layout, feature_count, parser)?;
+    let cols = LayerCols { feature_count };
 
     // ── Geometry section ──────────────────────────────────────────────────
     let (rest, geometry) = parse_geometry(input, header, layout.geometry, feature_count, parser)?;
@@ -118,7 +114,7 @@ pub(crate) fn parse_layer02<'a>(
         let before = input.len();
         let typ_byte;
         (input, typ_byte) = parse_u8(input)?;
-        let typ = match cols.column(typ_byte)? {
+        let typ = match Column02::parse(typ_byte)? {
             Column02::SharedDict(kind) => {
                 let shared_dict;
                 (input, shared_dict) = parse_shared_dict02(input, kind, &cols, parser)?;
@@ -294,7 +290,7 @@ impl<'a> From<ColumnValues<'a>> for RawMValue<'a> {
 fn parse_column_header<'a>(
     input: &'a [u8],
     typ: ColumnType02,
-    cols: &LayerCols<'a>,
+    cols: &LayerCols,
     parser: &mut Parser,
 ) -> MltResult<(&'a [u8], &'a str, RawPresence<'a>)> {
     let (input, name) = if typ.data.has_name() {
@@ -339,14 +335,15 @@ pub(super) fn parse_column_values<'a>(
             (input, ColumnValues::$type(scalar))
         }};
     }
-    /// Read the streams a float column of `$type` holds, of which its encoding names the count.
+    /// Read the stream a float column of `$type` holds.
     macro_rules! floats {
         ($type:ident) => {{
-            let typ = DataType02::$type;
-            let ctx = StreamCtx02::Property(typ);
+            let ctx = StreamCtx02::Property(DataType02::$type);
             let (input, data) = header02::parse_stream(input, ctx, count, parser)?;
-            let (input, floats) = parse_floats(input, typ, name, presence, data, parser)?;
-            (input, ColumnValues::$type(floats))
+            (
+                input,
+                ColumnValues::$type(RawFloats::single(name, presence, data)),
+            )
         }};
     }
     Ok(match values {
@@ -376,7 +373,7 @@ pub(super) fn parse_column_values<'a>(
 fn parse_m_values<'a>(
     mut input: &'a [u8],
     count: u32,
-    cols: &LayerCols<'a>,
+    cols: &LayerCols,
     column_names: &mut Vec<(Cow<'a, str>, ColumnRole)>,
     parser: &mut Parser,
 ) -> MltRefResult<'a, Vec<crate::decoder::MValueColumn<'a, Lazy>>> {
@@ -391,7 +388,7 @@ fn parse_m_values<'a>(
     for _ in 0..count {
         let typ_byte;
         (input, typ_byte) = parse_u8(input)?;
-        let column = ValuesColumn02::parse_m_value(typ_byte, cols.shared_count()?)?;
+        let column = ValuesColumn02::parse_m_value(typ_byte)?;
         let name;
         let presence;
         (input, name, presence) = parse_column_header(input, column.into(), cols, parser)?;
@@ -412,52 +409,13 @@ fn parse_m_values<'a>(
     Ok((input, m_values))
 }
 
-/// Finish a float column, reading the dictionary stream when its data stream turned out to be one of codes.
-fn parse_floats<'a>(
-    input: &'a [u8],
-    typ: DataType02,
-    name: &'a str,
-    presence: RawPresence<'a>,
-    data: RawStream<'a>,
-    parser: &mut Parser,
-) -> MltRefResult<'a, RawFloats<'a>> {
-    let (input, encoding) = match data.meta.encoding.logical {
-        LogicalEncoding::Float(FloatLogical::Alp(params)) => {
-            (input, RawFloatsEncoding::Alp { params, data })
-        }
-        LogicalEncoding::Float(FloatLogical::Dict) => {
-            // The dictionary's count is explicit in its header, so this fallback is never used.
-            let ctx = StreamCtx02::PropertyDictionary(typ);
-            let count = Count02::Implied(data.meta.num_values);
-            let (input, dictionary) = header02::parse_stream(input, ctx, count, parser)?;
-            let encoding = RawFloatsEncoding::Dictionary {
-                codes: data,
-                dictionary,
-            };
-            (input, encoding)
-        }
-        LogicalEncoding::Float(FloatLogical::None)
-        | LogicalEncoding::Int(_)
-        | LogicalEncoding::Bool(_)
-        | LogicalEncoding::Vertex(_) => (input, RawFloatsEncoding::Single(data)),
-    };
-    Ok((
-        input,
-        RawFloats {
-            name,
-            presence,
-            encoding,
-        },
-    ))
-}
-
 /// Parse a shared-dictionary column: its corpus, then the children that index into it.
 ///
 /// Each child carries its own presence nibble and offsets stream.
 fn parse_shared_dict02<'a>(
     input: &'a [u8],
     kind: SharedDictKind,
-    cols: &LayerCols<'a>,
+    cols: &LayerCols,
     parser: &mut Parser,
 ) -> MltRefResult<'a, RawSharedDict<'a>> {
     let (input, name) = parse_string(input)?;
@@ -502,7 +460,7 @@ fn parse_shared_dict02<'a>(
     for _ in 0..child_count {
         let child_byte;
         (input, child_byte) = parse_u8(input)?;
-        let child_typ = cols.column_type(child_byte)?;
+        let child_typ = ColumnType02::parse(child_byte)?;
         if child_typ.data != DataType02::Str {
             return Err(MltError::ParsingColumnType(child_byte));
         }
@@ -601,31 +559,13 @@ pub(super) fn parse_strings<'a>(
 }
 
 /// What every column of a layer reads its type byte, presence bitfield and value counts against.
-struct LayerCols<'a> {
-    /// The layer's shared presence bitfields, which columns point into by index.
-    shared: Vec<RawPresence<'a>>,
+struct LayerCols {
     feature_count: u32,
 }
 
-impl<'a> LayerCols<'a> {
-    /// How many shared bitfields the layer declared, capped at [`LayerLayout::MAX_SHARED_PRESENCE`].
-    fn shared_count(&self) -> MltResult<u8> {
-        Ok(u8::try_from(self.shared.len())?)
-    }
-
-    /// Read a column type byte as the shape its data type nibble names.
-    fn column(&self, byte: u8) -> MltResult<Column02> {
-        Column02::parse(byte, self.shared_count()?)
-    }
-
-    /// Read a column type byte that has to name a column of values.
-    fn column_type(&self, byte: u8) -> MltResult<ColumnType02> {
-        ColumnType02::parse(byte, self.shared_count()?)
-    }
-
-    /// Resolve a column's presence nibble into the bits that describe its nulls,
-    /// consuming the column's own bitfield only when it has one.
-    fn presence(
+impl LayerCols {
+    /// Resolve a column's presence nibble into the bits that describe its nulls.
+    fn presence<'a>(
         &self,
         typ: ColumnType02,
         input: &'a [u8],
@@ -638,12 +578,6 @@ impl<'a> LayerCols<'a> {
                     presence_coding::read(input, self.feature_count, coding, parser)?;
                 Ok((input, RawPresence::from_bits(bits)))
             }
-            // `ColumnType02::parse` rejected any index past the declared count.
-            Presence02::Shared(index) => self
-                .shared
-                .get(usize::from(index))
-                .map(|bits| (input, bits.clone()))
-                .ok_or_else(|| MltError::ParsingColumnType(typ.to_byte())),
         }
     }
 
@@ -656,44 +590,6 @@ impl<'a> LayerCols<'a> {
             RawPresence::AllPresent | RawPresence::Stream(_) => self.feature_count,
         })
     }
-}
-
-/// Parse the layer's shared presence bitfields: `shared_presence` back-to-back
-/// bitfields, each headed by the byte naming its coding when the layout says so.
-///
-/// The layout byte caps the count at [`LayerLayout::MAX_SHARED_PRESENCE`], so this
-/// allocates nothing worth charging to the parser's budget.
-fn parse_shared_presence<'a>(
-    input: &'a [u8],
-    layout: LayerLayout,
-    feature_count: u32,
-    parser: &mut Parser,
-) -> MltRefResult<'a, LayerCols<'a>> {
-    let mut input = input;
-    let mut shared = Vec::with_capacity(usize::from(layout.shared_presence));
-    for _ in 0..layout.shared_presence {
-        #[expect(
-            clippy::unnecessary_lazy_evaluations,
-            reason = "an eager error is dropped on every success"
-        )]
-        let coding = if layout.shared_coded {
-            let byte;
-            (input, byte) = parse_u8(input)?;
-            shared_coding(byte).ok_or_else(|| MltError::PresenceCodingByte(byte))?
-        } else {
-            PresenceCoding::Bitmap
-        };
-        let bits;
-        (input, bits) = presence_coding::read(input, feature_count, coding, parser)?;
-        shared.push(RawPresence::from_bits(bits));
-    }
-    Ok((
-        input,
-        LayerCols {
-            shared,
-            feature_count,
-        },
-    ))
 }
 
 /// Parse the geometry section: the streams the layer layout declares, in its fixed order.

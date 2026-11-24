@@ -100,111 +100,6 @@ impl Morton {
     }
 }
 
-/// The decimal scaling a Framed, Exception-Free ALP column uses: `i = round(v * 10^e / 10^f)`.
-/// Chosen before any value is seen, so it carries no frame of reference.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AlpScale {
-    /// Decimal exponent the values were scaled by.
-    pub(crate) e: u8,
-    /// Factor dividing out the trailing zeros `e` introduced, never exceeding `e`.
-    pub(crate) f: u8,
-}
-
-/// Framed, Exception-Free ALP parameters: `v = (base + offset) * 10^f / 10^e`.
-/// Written as a scale byte and a base varint, the stream itself holding the unsigned offsets.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct Alp {
-    pub(crate) scale: AlpScale,
-    /// Frame of reference the offsets are measured from, the smallest scaled integer in the column.
-    pub(crate) base: i64,
-}
-
-#[cfg(feature = "unstable-v2")]
-impl AlpScale {
-    /// Largest exponent the codes can carry, past which `v * 10^e` leaves the `i64` range.
-    /// The codes themselves are bounded tighter, to `2^53 - 1`, by the encoder.
-    pub(crate) const MAX_EXPONENT: u8 = 18;
-
-    /// Net power of ten the codes carry, which fixes their magnitude and so their stored size.
-    /// The order [`candidates`](crate::codecs::alp::candidates) walks, and so what lets the
-    /// encoder stop at the first scale that fits; only the tests holding that invariant name it.
-    #[cfg(test)]
-    pub(crate) fn net(self) -> u8 {
-        self.e - self.f
-    }
-
-    /// The header byte naming this scale, the pairs with `f <= e` numbered row by row.
-    pub(crate) fn to_byte(self) -> u8 {
-        Self::row_start(self.e) + self.f
-    }
-
-    /// Read a scale back from its header byte, rejecting the codes past the last pair.
-    #[expect(
-        clippy::unnecessary_lazy_evaluations,
-        reason = "an eager error is dropped on every success"
-    )]
-    pub(crate) fn from_byte(byte: u8) -> MltResult<Self> {
-        (0..=Self::MAX_EXPONENT)
-            .find_map(|e| {
-                let f = byte.checked_sub(Self::row_start(e))?;
-                (f <= e).then_some(Self { e, f })
-            })
-            .ok_or_else(|| MltError::InvalidAlpScale(byte))
-    }
-
-    /// First byte of the row for `e`, which is `e * (e + 1) / 2`.
-    fn row_start(e: u8) -> u8 {
-        (1..=e).sum()
-    }
-}
-
-/// Flattened, since the nesting is an encoder concern and these appear in stream labels.
-impl std::fmt::Debug for Alp {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        write!(
-            f,
-            "Alp {{ e: {}, f: {}, base: {} }}",
-            self.scale.e, self.scale.f, self.base
-        )
-    }
-}
-
-#[cfg(feature = "unstable-v2")]
-impl Alp {
-    #[cfg(test)]
-    pub(crate) fn new(e: u8, f: u8, base: i64) -> MltResult<Self> {
-        if e <= AlpScale::MAX_EXPONENT && f <= e {
-            Ok(Self {
-                scale: AlpScale { e, f },
-                base,
-            })
-        } else {
-            Err(MltError::InvalidAlpParams(e, f))
-        }
-    }
-
-    /// Measure a scaled integer from the frame of reference, giving the offset the stream stores.
-    /// Wrapping, so a foreign stream whose codes span the whole `i64` range still subtracts
-    /// exactly; our own encoder keeps codes within `2^53 - 1`, so the spread fits `u64` easily.
-    #[expect(
-        clippy::cast_sign_loss,
-        reason = "the bit pattern is the point; `code_at` casts it back"
-    )]
-    pub(crate) fn offset_of(self, code: i64) -> u64 {
-        (code as u64).wrapping_sub(self.base as u64)
-    }
-
-    /// Put a stored offset back on the frame of reference, inverting [`Self::offset_of`].
-    #[expect(
-        clippy::cast_possible_wrap,
-        clippy::cast_sign_loss,
-        reason = "the bit pattern is the point; inverts `offset_of` exactly"
-    )]
-    pub(crate) fn code_at(self, offset: u64) -> i64 {
-        (self.base as u64).wrapping_add(offset) as i64
-    }
-}
-
 /// What kind of values a stream holds, which fixes the encodings it can name.
 /// Neither wire format stores it: v1 reads it from the column type, v2 from the stream's context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -223,8 +118,6 @@ pub enum IntLogical {
     Delta,
     Rle(RleMeta),
     DeltaRle(RleMeta),
-    /// Deltas of the deltas, both running from zero.
-    Delta2,
 }
 
 /// Logical encoding of a bool column's data stream or a presence bitfield.
@@ -232,10 +125,6 @@ pub enum IntLogical {
 pub enum BoolLogical {
     /// A raw packed bitmap, one bit per value.
     None,
-    /// Alternating run lengths, which only the tag `0x02` codec reads or writes.
-    Runs,
-    /// A bitmap of the bitmap's non-zero bytes and then those bytes, which only the tag `0x02` codec reads or writes.
-    Sparse,
     /// A byte-RLE compressed bitmap.
     /// Its run parameters come from the stream's context rather than from its header.
     ByteRle(RleMeta),
@@ -246,13 +135,6 @@ pub enum BoolLogical {
 pub enum FloatLogical {
     /// Fixed-width little-endian values, one per element.
     None,
-    /// A decimal split across two integer streams, which v1 can name but no decoder here implements.
-    /// One code per element, with the distinct values following as a second stream.
-    /// Only the tag `0x02` codec reads or writes it.
-    Dict,
-    /// Integers scaled by these parameters.
-    /// Only the tag `0x02` codec reads or writes it.
-    Alp(Alp),
 }
 
 /// Logical encoding of a geometry vertex stream, whose values are interleaved coordinate pairs.
@@ -261,11 +143,7 @@ pub enum VertexLogical {
     None,
     Delta,
     ComponentwiseDelta,
-    /// Componentwise deltas of the componentwise deltas.
-    ComponentwiseDelta2,
     MortonDelta(Morton),
-    /// rANS over componentwise deltas, coded per run of the layer's topology.
-    Rans,
     /// Each vertex guessed from the ones before it per the layer's topology, or copied from
     /// earlier ones, with the residuals in byte planes per kind of vertex.
     Predicted,
@@ -279,12 +157,7 @@ impl VertexLogical {
     #[must_use]
     pub fn words_per_vertex(self) -> u32 {
         match self {
-            Self::None
-            | Self::Delta
-            | Self::ComponentwiseDelta
-            | Self::ComponentwiseDelta2
-            | Self::Rans
-            | Self::Predicted => 2,
+            Self::None | Self::Delta | Self::ComponentwiseDelta | Self::Predicted => 2,
             Self::MortonDelta(_) => 1,
             #[cfg(feature = "unstable-v2")]
             Self::Xyz(..) => 3,
@@ -347,15 +220,13 @@ impl LogicalEncoding {
     }
 
     /// Whether the stream's own logical pass is a no-op, so the physical words are already the output.
-    /// True for a float dictionary's codes, which the column turns back into floats.
-    /// Not true for Framed, Exception-Free ALP, whose offsets still need the frame of reference added back.
     #[must_use]
     pub(crate) fn is_identity(self) -> bool {
         matches!(
             self,
             Self::Int(IntLogical::None)
                 | Self::Bool(BoolLogical::None)
-                | Self::Float(FloatLogical::None | FloatLogical::Dict)
+                | Self::Float(FloatLogical::None)
                 | Self::Vertex(VertexLogical::None)
         )
     }
@@ -436,21 +307,13 @@ pub enum PhysicalEncoding {
     /// Can produce better results in combination with a heavyweight compression scheme like `Gzip`.
     /// Simple compression scheme where the encoding is easier to implement compared to `FastPfor`.
     VarInt,
-    /// Every value in the same number of bits, which a leading payload byte names.
-    /// Beats `VarInt` on the short, small-alphabet streams a dictionary's codes form,
-    /// where `FastPFor`'s 128-value blocks are too coarse to pay for themselves.
-    #[cfg(feature = "unstable-v2")]
-    BitPacked,
 }
 
-/// The `FastPFor` block size and word order a wire version codes its integer streams with.
+/// The `FastPFor` block size and word order integer streams are coded with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum FastPForKind {
     /// 256-value blocks over big-endian words
     Block256Be,
-    /// 128-value blocks over little-endian words
-    #[cfg(feature = "unstable-v2")]
-    Block128Le,
 }
 
 // RawStream types
@@ -595,7 +458,7 @@ impl Display for StreamType {
 }
 
 impl Display for LogicalEncoding {
-    /// The value kind, then its encoding: `int/rle`, `float/alp`, `vertex/morton-delta`.
+    /// The value kind, then its encoding: `int/rle`, `bool/byte-rle`, `vertex/morton-delta`.
     ///
     /// Run parameters are left out, they belong to the region's own annotation.
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
@@ -607,35 +470,23 @@ impl Display for LogicalEncoding {
                     IntLogical::Delta => "delta",
                     IntLogical::Rle(_) => "rle",
                     IntLogical::DeltaRle(_) => "delta-rle",
-                    IntLogical::Delta2 => "delta2",
                 },
             ),
             Self::Bool(b) => (
                 "bool",
                 match b {
                     BoolLogical::None => "none",
-                    BoolLogical::Runs => "runs",
-                    BoolLogical::Sparse => "sparse",
                     BoolLogical::ByteRle(_) => "byte-rle",
                 },
             ),
-            Self::Float(float) => (
-                "float",
-                match float {
-                    FloatLogical::None => "none",
-                    FloatLogical::Dict => "dict",
-                    FloatLogical::Alp(_) => "alp",
-                },
-            ),
+            Self::Float(FloatLogical::None) => ("float", "none"),
             Self::Vertex(vertex) => (
                 "vertex",
                 match vertex {
                     VertexLogical::None => "none",
                     VertexLogical::Delta => "delta",
                     VertexLogical::ComponentwiseDelta => "componentwise-delta",
-                    VertexLogical::ComponentwiseDelta2 => "componentwise-delta2",
                     VertexLogical::MortonDelta(_) => "morton-delta",
-                    VertexLogical::Rans => "rans",
                     VertexLogical::Predicted => "predicted",
                     #[cfg(feature = "unstable-v2")]
                     VertexLogical::Xyz(_, XyzLogical::None) => "xyz-none",
@@ -653,21 +504,12 @@ impl Display for LogicalEncoding {
 }
 
 impl Display for PhysicalEncoding {
-    /// `none`, `varint`, `fastpfor[256be]`, `bit-packed`.
+    /// `none`, `varint`, `fastpfor[256be]`.
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
             Self::None => f.write_str("none"),
             Self::VarInt => f.write_str("varint"),
-            Self::FastPFor(kind) => {
-                let name = match kind {
-                    FastPForKind::Block256Be => "256be",
-                    #[cfg(feature = "unstable-v2")]
-                    FastPForKind::Block128Le => "128le",
-                };
-                write!(f, "fastpfor[{name}]")
-            }
-            #[cfg(feature = "unstable-v2")]
-            Self::BitPacked => f.write_str("bit-packed"),
+            Self::FastPFor(FastPForKind::Block256Be) => f.write_str("fastpfor[256be]"),
         }
     }
 }
@@ -681,13 +523,6 @@ mod tests {
 
     fn morton() -> Morton {
         Morton { bits: 4, shift: 0 }
-    }
-
-    fn alp() -> Alp {
-        Alp {
-            scale: AlpScale { e: 3, f: 1 },
-            base: -5,
-        }
     }
 
     fn rle() -> RleMeta {
@@ -743,25 +578,16 @@ mod tests {
     #[case::int_delta(LogicalEncoding::Int(IntLogical::Delta), "int/delta")]
     #[case::int_rle(LogicalEncoding::Int(IntLogical::Rle(rle())), "int/rle")]
     #[case::int_delta_rle(LogicalEncoding::Int(IntLogical::DeltaRle(rle())), "int/delta-rle")]
-    #[case::int_delta2(LogicalEncoding::Int(IntLogical::Delta2), "int/delta2")]
     #[case::bool_none(LogicalEncoding::Bool(BoolLogical::None), "bool/none")]
-    #[case::bool_runs(LogicalEncoding::Bool(BoolLogical::Runs), "bool/runs")]
-    #[case::bool_sparse(LogicalEncoding::Bool(BoolLogical::Sparse), "bool/sparse")]
     #[case::bool_byte_rle(LogicalEncoding::Bool(BoolLogical::ByteRle(rle())), "bool/byte-rle")]
     #[case::float_none(LogicalEncoding::Float(FloatLogical::None), "float/none")]
-    #[case::float_dict(LogicalEncoding::Float(FloatLogical::Dict), "float/dict")]
-    #[case::float_alp(LogicalEncoding::Float(FloatLogical::Alp(alp())), "float/alp")]
     #[case::vertex_none(LogicalEncoding::Vertex(VertexLogical::None), "vertex/none")]
     #[case::vertex_delta(LogicalEncoding::Vertex(VertexLogical::Delta), "vertex/delta")]
     #[case::vertex_componentwise_delta(
         LogicalEncoding::Vertex(VertexLogical::ComponentwiseDelta),
         "vertex/componentwise-delta"
     )]
-    #[case::vertex_componentwise_delta2(
-        LogicalEncoding::Vertex(VertexLogical::ComponentwiseDelta2),
-        "vertex/componentwise-delta2"
-    )]
-    #[case::vertex_rans(LogicalEncoding::Vertex(VertexLogical::Rans), "vertex/rans")]
+    #[case::vertex_predicted(LogicalEncoding::Vertex(VertexLogical::Predicted), "vertex/predicted")]
     #[case::vertex_morton_delta(
         LogicalEncoding::Vertex(VertexLogical::MortonDelta(morton())),
         "vertex/morton-delta"
@@ -797,20 +623,6 @@ mod tests {
         "fastpfor[256be]"
     )]
     fn every_physical_encoding_renders_its_wire_label(
-        #[case] encoding: PhysicalEncoding,
-        #[case] expected: &str,
-    ) {
-        assert_eq!(encoding.to_string(), expected);
-    }
-
-    #[cfg(feature = "unstable-v2")]
-    #[rstest]
-    #[case::fastpfor_128le(
-        PhysicalEncoding::FastPFor(FastPForKind::Block128Le),
-        "fastpfor[128le]"
-    )]
-    #[case::bit_packed(PhysicalEncoding::BitPacked, "bit-packed")]
-    fn every_v2_physical_encoding_renders_its_wire_label(
         #[case] encoding: PhysicalEncoding,
         #[case] expected: &str,
     ) {

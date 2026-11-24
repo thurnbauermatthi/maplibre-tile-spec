@@ -354,13 +354,10 @@ fn decode_triangle_offsets(lengths: &[u32], dec: &mut Decoder) -> MltResult<Vec<
     Ok(offsets)
 }
 
-/// Decode the vertex stream once the topology `levels` is known, since rANS codes it over their runs.
+/// Decode the vertex stream once the topology `levels` is known, since predicted vertices are coded over their runs.
 #[cfg_attr(
     not(feature = "unstable-v2"),
-    expect(
-        unused_variables,
-        reason = "only rANS and predicted vertices read the topology"
-    )
+    expect(unused_variables, reason = "only predicted vertices read the topology")
 )]
 fn decode_vertex_stream(
     stream: RawStream<'_>,
@@ -380,21 +377,6 @@ fn decode_vertex_stream(
         let vertex_count = (stream.meta.num_words()? / 2).into_usize();
         let runs = crate::codecs::predicted::runs(types, levels, vertex_count)?;
         return crate::codecs::predicted::decode(stream.data, &runs, vertex_count, dec);
-    }
-    #[cfg(feature = "unstable-v2")]
-    if stream.meta.encoding.logical == LogicalEncoding::Vertex(VertexLogical::Rans) {
-        if dictionary {
-            return Err(MltError::UnsupportedLogicalEncoding(
-                stream.meta.encoding.logical,
-                "a vertex dictionary",
-            ));
-        }
-        return crate::codecs::rans::decode_vertices(
-            stream.data,
-            run_offsets(levels),
-            stream.meta.num_words()?,
-            dec,
-        );
     }
     stream.decode_ints::<i32>(dec)
 }

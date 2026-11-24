@@ -17,12 +17,7 @@
 //! * `tri` - stores only the tessellation triangles, without the polygon outlines.
 //!   A v2-only layout, so a `*_tri` fixture has no v1 sibling.
 //! * `fs` - forces normally-empty streams to still be written, as the Java encoder used to do
-//! * `bp` - bit-packed dictionary codes, i.e. every code in the same number of bits.
-//!   A v2-only physical layout, so the v1 sibling of each `*_bp*` fixture holds the
-//!   same codes as varints.
-//! * `sp` - shared presence, i.e. columns null on the same features share one bitfield.
-//!   A v2-only encoding, so the v1 sibling of each `*_sp*` fixture holds the same
-//!   data under a `*_same_nulls*` name instead.
+//! * `predicted` - predicted vertices, a v2-only vertex encoding, so these fixtures have no v1 sibling.
 
 mod layer;
 mod writer;
@@ -34,9 +29,9 @@ use std::sync::LazyLock;
 use clap::Parser;
 use mlt_core::compact_str::CompactString;
 use mlt_core::encoder::{
-    FloatEncoding, IntEncoder as E, LogicalEncoder as L, StagedId as Id, StagedInterior,
-    StagedLeaf, StagedList, StagedMValue as M, StagedMap, StagedNested, StagedNode,
-    StagedProperty as P, StagedStruct, StagedValues as MV, StrEncoding, VertexBufferType,
+    IntEncoder as E, LogicalEncoder as L, StagedId as Id, StagedInterior, StagedLeaf, StagedList,
+    StagedMValue as M, StagedMap, StagedNested, StagedNode, StagedProperty as P, StagedStruct,
+    StagedValues as MV, StrEncoding, VertexBufferType,
 };
 use mlt_core::geo_types::{
     Coord, Geometry, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon, coord,
@@ -112,7 +107,7 @@ fn main() {
     let mut writer = SynthWriter::new(&Args::parse());
 
     generate_geometry(&mut writer);
-    generate_rans_vertices(&mut writer);
+    generate_predicted_vertices(&mut writer);
     generate_mixed(&mut writer);
     generate_extent(&mut writer);
     generate_ids(&mut writer);
@@ -391,7 +386,7 @@ fn generate_geometry(w: &mut SynthWriter) {
         .write(w, "multiline_morton");
 }
 
-/// A line of `n` vertices whose steps vary enough for its rANS lanes to need refill words.
+/// A line of `n` vertices whose steps vary, some too far for one residual byte.
 fn wandering_line(n: usize) -> LineString<i32> {
     const STEPS: [i32; 10] = [12, -12, 14, -14, 24, -28, 48, 12, 13, -15];
     let (mut x, mut y) = (100, 100);
@@ -404,44 +399,51 @@ fn wandering_line(n: usize) -> LineString<i32> {
         .collect()
 }
 
-fn generate_rans_vertices(w: &mut SynthWriter) {
-    p0().rans_vertices().write(w, "point_rans");
+fn generate_predicted_vertices(w: &mut SynthWriter) {
+    p0().predicted_vertices().write(w, "point_predicted");
     geo_varint()
         .geo(line1())
-        .rans_vertices()
-        .write(w, "line_rans");
+        .predicted_vertices()
+        .write(w, "line_predicted");
     geo_varint()
         .geo(LineString::new(morton_curve()))
-        .rans_vertices()
-        .write(w, "line_morton_curve_rans");
+        .predicted_vertices()
+        .write(w, "line_morton_curve_predicted");
     geo_varint()
         .geo(wandering_line(24))
-        .rans_vertices()
-        .write(w, "line_wandering_rans");
-    geo_varint()
-        .geo(wkt!(LINESTRING(196 3904, 292 3808, 388 3712, 484 3616, 580 3520, 676 3424)))
-        .rans_vertices()
-        .write(w, "line_diagonal_rans");
+        .predicted_vertices()
+        .write(w, "line_wandering_predicted");
     geo_varint()
         .geo(line1())
         .geo(wkt!(MULTILINESTRING((24 10, 42 18),(30 36, 48 52, 35 62))))
-        .rans_vertices()
-        .write(w, "multiline_rans");
+        .predicted_vertices()
+        .write(w, "multiline_predicted");
+    // A four-vertex ring, whose last vertex completes the parallelogram.
+    geo_varint()
+        .geo(wkt!(POLYGON((10 10, 20 10, 20 20, 10 20, 10 10))))
+        .predicted_vertices()
+        .write(w, "poly_square_predicted");
     geo_varint()
         .geo(poly1h())
-        .rans_vertices()
-        .write(w, "poly_hole_rans");
+        .predicted_vertices()
+        .write(w, "poly_hole_predicted");
+    // Two polygons whose second walks the shared wall of the first backwards, which is stored as a copy.
+    geo_varint()
+        .geo(wkt!(POLYGON((0 0, 10 0, 10 10, 0 10, 0 0))))
+        .geo(wkt!(POLYGON((10 10, 10 0, 20 0, 20 10, 10 10))))
+        .predicted_vertices()
+        .write(w, "polys_shared_wall_predicted");
     geo_varint()
         .tessellate()
         .geo(poly1h())
-        .rans_vertices()
-        .write(w, "poly_hole_tes_rans");
+        .predicted_vertices()
+        .write(w, "poly_hole_tes_predicted");
     geo_varint()
         .geo(P0)
         .geo(line1())
         .geo(poly1h())
-        .rans_vertices()
-        .write(w, "mix_pt_line_polyh_rans");
+        .predicted_vertices()
+        .write(w, "mix_pt_line_polyh_predicted");
 }
 
 fn write_mix(w: &mut SynthWriter, current: &[usize]) {
@@ -1158,9 +1160,9 @@ fn generate_properties(w: &mut SynthWriter) {
     generate_props_i32(w);
     generate_props_u32(w);
     generate_props_u64(w);
-    generate_float_codecs(w);
+    generate_floats(w);
     generate_props_str(w);
-    generate_shared_presence(w);
+    generate_same_nulls(w);
     generate_presence_codings(w);
     generate_shared_dictionaries(w);
 }
@@ -1651,33 +1653,6 @@ fn generate_m_value_encodings(w: &mut SynthWriter) {
             M::new("val", None, MV::U32((0..300).map(|i| i % 97).collect())),
         )
         .write(w, "mvalues_fpf");
-
-    // The v2-only float encodings, which an m-value column reaches exactly as a property does.
-    m_lines()
-        .no_v1()
-        .add_m_value_float(
-            E::varint(),
-            FloatEncoding::Alp,
-            M::new(
-                "val",
-                None,
-                MV::F64(vec![-0.75, -0.5, -0.25, 0.25, 0.5, 0.75, 1.25, 2.5]),
-            ),
-        )
-        .write(w, "mvalues_f64_alp");
-    m_lines()
-        .no_v1()
-        .add_m_value_float(
-            E::varint(),
-            FloatEncoding::Dict,
-            M::new(
-                "val",
-                None,
-                MV::F32(vec![1.5, 2.5, 1.5, 1.5, 2.5, 3.5, 1.5, 2.5]),
-            ),
-        )
-        .write(w, "mvalues_f32_dict");
-
     // The string layouts, which the leading stream's extension bits name.
     m_lines()
         .no_v1()
@@ -1771,39 +1746,28 @@ fn mask_of(len: usize, present: impl Fn(usize) -> bool) -> String {
 
 /// One fixture per presence coding, each over a mask that coding stores smallest.
 ///
-/// The three compete by size on every column, so a mask is what picks the coding:
-/// scattered bits over few features favor the bitmap, one block of present features
-/// favors runs, and scattered bytes of alternating bits among empty ones favor the
-/// sparse bitmap.
+/// The two compete by size on every column, so a mask is what picks the coding:
+/// scattered bits favor the bitmap, one block of present features favors byte-RLE.
 ///
-/// v2 only: v1 has one way of storing presence and nothing here would vary it.
+/// v2 only: v1 always stores presence byte-RLE coded and nothing here would vary it.
 fn generate_presence_codings(w: &mut SynthWriter) {
     let e = E::varint();
 
-    // Eight features, every other one present. Runs would take a varint each,
-    // where the whole bitmap is one byte.
+    // Eight features, every other one present: the whole bitmap is one byte.
     let scattered = mask_of(8, |i| i % 2 == 0);
     masked_points(&scattered)
         .no_v1()
         .add_prop(e, P::opt_u32("val", masked(&scattered)))
         .write(w, "presence_bitmap");
 
-    // One block of present features: three runs against a 25-byte bitmap.
+    // One block of present features: five byte-RLE runs against a 25-byte bitmap.
     let block = mask_of(200, |i| (50..150).contains(&i));
     masked_points(&block)
         .no_v1()
         .add_prop(e, P::opt_u32("val", masked(&block)))
-        .write(w, "presence_runs");
+        .write(w, "presence_byte_rle");
 
-    // Twenty alternating bytes among two hundred and forty empty ones: a 30-byte summary
-    // and twenty bytes against a 240-byte bitmap, with runs far larger still.
-    let clustered = mask_of(1920, |i| (i / 8) % 12 == 5 && i % 2 == 0);
-    masked_points(&clustered)
-        .no_v1()
-        .add_prop(e, P::opt_u32("val", masked(&clustered)))
-        .write(w, "presence_sparse");
-
-    // All three in one layer, which is what a column-by-column choice is for:
+    // Both in one layer, which is what a column-by-column choice is for:
     // a layer's columns do not agree on how their nulls are shaped.
     masked_points(&block)
         .no_v1()
@@ -1811,14 +1775,7 @@ fn generate_presence_codings(w: &mut SynthWriter) {
             e,
             P::opt_u32("bitmap", masked(&mask_of(200, |i| i % 2 == 0))),
         )
-        .add_prop(e, P::opt_u32("runs", masked(&block)))
-        .add_prop(
-            e,
-            P::opt_u32(
-                "sparse",
-                masked(&mask_of(200, |i| (i / 8) % 12 == 5 && i % 2 == 0)),
-            ),
-        )
+        .add_prop(e, P::opt_u32("byte_rle", masked(&block)))
         .add_prop(e, P::u32("always", vec![7; block.len()]))
         .write(w, "presence_mixed");
 
@@ -1827,43 +1784,20 @@ fn generate_presence_codings(w: &mut SynthWriter) {
     masked_points(&block)
         .no_v1()
         .add_prop(e, P::bool("flag", bools(&block)))
-        .write(w, "bool_runs");
-    masked_points(&clustered)
-        .no_v1()
-        .add_prop(e, P::bool("flag", bools(&clustered)))
-        .write(w, "bool_sparse");
-
-    // The same three codings again, this time on shared fields, which name their
-    // coding in a byte of their own rather than in a column's nibble.
-    for (name, mask) in [
-        ("presence_shared_bitmap", &scattered),
-        ("presence_shared_runs", &block),
-        ("presence_shared_sparse", &clustered),
-    ] {
-        masked_points(mask)
-            .no_v1()
-            .add_prop(e, P::opt_u32("a", masked(mask)))
-            .add_prop(e, P::opt_u32("b", masked(mask)))
-            .write(w, name);
-    }
+        .write(w, "bool_byte_rle");
 }
 
-/// Columns that are null on exactly the same features.
-///
-/// A v2 layer stores one bitfield for such a set and points every member at it;
-/// v1 gives each column its own presence stream, so these are the fixtures where
-/// the two formats disagree the most.
-fn generate_shared_presence(w: &mut SynthWriter) {
+/// Columns that are null on exactly the same features, each storing its own presence.
+fn generate_same_nulls(w: &mut SynthWriter) {
     let e = E::varint();
 
     let both = "x-x-";
     masked_points(both)
         .add_prop(e, P::opt_u32("a", masked(both)))
         .add_prop(e, P::opt_u32("b", masked(both)))
-        .write_per_version(w, "props_same_nulls", "props_sp");
+        .write(w, "props_same_nulls");
 
-    // Two shared masks interleaved, plus a mask nobody else has and a column that
-    // is never null, so all three presence nibbles appear in one layer.
+    // Two masks interleaved, plus a mask nobody else has and a column that is never null.
     let a = "x--x-x";
     let b = "xx---x";
     let lonely = "-x-x-x";
@@ -1875,9 +1809,8 @@ fn generate_shared_presence(w: &mut SynthWriter) {
         .add_prop(e, P::opt_u32("a3", masked(a)))
         .add_prop(e, P::opt_u32("lonely", masked(lonely)))
         .add_prop(e, P::u32("always", vec![7; a.len()]))
-        .write_per_version(w, "props_same_nulls_mixed", "props_sp_mixed");
+        .write(w, "props_same_nulls_mixed");
 
-    // The ID column shares like any other column.
     let with_id = "x-xx-";
     masked_points(with_id)
         .ids(
@@ -1885,10 +1818,9 @@ fn generate_shared_presence(w: &mut SynthWriter) {
             E::varint_with(L::None),
         )
         .add_prop(e, P::opt_u32("val", masked(with_id)))
-        .write_per_version(w, "props_same_nulls_id", "props_sp_id");
+        .write(w, "props_same_nulls_id");
 
-    // Eight pairs of columns want a shared bitfield but only seven fit in the
-    // layout byte, so the last pair keeps its own.
+    // Eight pairs of columns, each pair null on the same features.
     let masks: Vec<String> = (0..8)
         .map(|i| {
             let mut mask = vec![b'-'; 9];
@@ -1903,20 +1835,18 @@ fn generate_shared_presence(w: &mut SynthWriter) {
             .add_prop(e, P::opt_u32(format!("a{i}"), masked(mask)))
             .add_prop(e, P::opt_u32(format!("b{i}"), masked(mask)));
     }
-    layer.write_per_version(w, "props_same_nulls_max", "props_sp_max");
+    layer.write(w, "props_same_nulls_max");
 
-    // A shared dictionary holds no values of its own, but each of its children is
-    // null on its own features, so each shares a bitfield like any other column.
+    // A shared dictionary's children are each null on their own features.
     masked_points(a)
         .add_shared_dict(
             SharedDict::new("name:", StrEncoding::Plain)
                 .opt("de", E::varint(), masked_strings(a))
                 .opt("en", E::varint(), masked_strings(a)),
         )
-        .write_per_version(w, "props_shared_dict_same_nulls", "props_shared_dict_sp");
+        .write(w, "props_shared_dict_same_nulls");
 
-    // The dictionary sits between two plain columns, so a child's mask is shared with
-    // one before it and one after it. `fr` is never null and shares nothing.
+    // The dictionary sits between two plain columns. `fr` is never null.
     masked_points(a)
         .add_prop(e, P::opt_u32("before", masked(a)))
         .add_shared_dict(
@@ -1926,24 +1856,15 @@ fn generate_shared_presence(w: &mut SynthWriter) {
                 .col("fr", E::varint(), always_strings(a.len())),
         )
         .add_prop(e, P::opt_u32("after", masked(b)))
-        .write_per_version(
-            w,
-            "props_shared_dict_same_nulls_mixed",
-            "props_shared_dict_sp_mixed",
-        );
+        .write(w, "props_shared_dict_same_nulls_mixed");
 
-    // Only one child has this mask, so it keeps its own bitfield rather than a slot.
     masked_points(a)
         .add_shared_dict(
             SharedDict::new("name:", StrEncoding::Plain)
                 .opt("de", E::varint(), masked_strings(a))
                 .opt("en", E::varint(), masked_strings(lonely)),
         )
-        .write_per_version(
-            w,
-            "props_shared_dict_same_nulls_lonely",
-            "props_shared_dict_sp_lonely",
-        );
+        .write(w, "props_shared_dict_same_nulls_lonely");
 }
 
 /// The two long values a dictionary is for, alternating, with nulls where `mask` says.
@@ -2097,30 +2018,24 @@ fn generate_props_u64(w: &mut SynthWriter) {
         .write(w, "props_u64_delta_rle");
 }
 
-/// Float columns under the two v2-only float encodings, one fixture per pinned encoding.
+/// Float columns over value shapes a float codec would care about, stored raw in both versions.
 ///
-/// v1 can express neither, so its sibling holds the same values raw under a name describing the data.
 /// The macro runs the same set for both float widths so neither can drift ahead of the other.
-fn generate_float_codecs(w: &mut SynthWriter) {
+fn generate_floats(w: &mut SynthWriter) {
     let e = E::varint();
 
-    macro_rules! float_codec_fixtures {
+    macro_rules! float_fixtures {
         ($name:literal, $ty:ty, $val:path, $opt:path) => {
             points(6)
-                .add_prop_float(
-                    e,
-                    FloatEncoding::Dict,
-                    $val("val", vec![1.5, 2.5, 1.5, 1.5, 2.5, 3.5]),
-                )
+                .add_prop(e, $val("val", vec![1.5, 2.5, 1.5, 1.5, 2.5, 3.5]))
                 .write_per_version(
                     w,
                     concat!("prop_", $name, "_repeated_np-rust"),
-                    concat!("prop_", $name, "_dict_np"),
+                    concat!("prop_", $name, "_repeated_np"),
                 );
             points(6)
-                .add_prop_float(
+                .add_prop(
                     e,
-                    FloatEncoding::Dict,
                     $opt(
                         "val",
                         vec![Some(1.5), None, Some(2.5), Some(1.5), None, Some(2.5)],
@@ -2129,57 +2044,39 @@ fn generate_float_codecs(w: &mut SynthWriter) {
                 .write_per_version(
                     w,
                     concat!("prop_", $name, "_repeated-rust"),
-                    concat!("prop_", $name, "_dict"),
+                    concat!("prop_", $name, "_repeated"),
                 );
             points(4)
-                .add_prop_float(
-                    e,
-                    FloatEncoding::Dict,
-                    $val("val", vec![0.0, -0.0, 0.0, -0.0]),
-                )
+                .add_prop(e, $val("val", vec![0.0, -0.0, 0.0, -0.0]))
                 .write_per_version(
                     w,
                     concat!("prop_", $name, "_zeros_np-rust"),
-                    concat!("prop_", $name, "_dict_zeros_np"),
+                    concat!("prop_", $name, "_zeros_np"),
                 );
             points(4)
-                .add_prop_float(
-                    e,
-                    FloatEncoding::Dict,
-                    $val("val", vec![<$ty>::NAN, 7.5, <$ty>::NAN, 7.5]),
-                )
+                .add_prop(e, $val("val", vec![<$ty>::NAN, 7.5, <$ty>::NAN, 7.5]))
                 .write_per_version(
                     w,
                     concat!("prop_", $name, "_nan_repeated_np-rust"),
-                    concat!("prop_", $name, "_dict_nan_np"),
+                    concat!("prop_", $name, "_nan_repeated_np"),
                 );
             points(6)
-                .add_prop_float(
-                    e,
-                    FloatEncoding::Dict,
-                    $val("val", vec![1.5, 2.5, 3.5, 4.5, 5.5, 6.5]),
-                )
+                .add_prop(e, $val("val", vec![1.5, 2.5, 3.5, 4.5, 5.5, 6.5]))
                 .write_per_version(
                     w,
                     concat!("prop_", $name, "_distinct_np-rust"),
-                    concat!("prop_", $name, "_dict_distinct_np"),
+                    concat!("prop_", $name, "_distinct_np"),
                 );
-
             points(6)
-                .add_prop_float(
-                    e,
-                    FloatEncoding::Alp,
-                    $val("val", vec![-0.75, -0.5, -0.25, 0.25, 0.5, 0.75]),
-                )
+                .add_prop(e, $val("val", vec![-0.75, -0.5, -0.25, 0.25, 0.5, 0.75]))
                 .write_per_version(
                     w,
                     concat!("prop_", $name, "_decimals_np-rust"),
-                    concat!("prop_", $name, "_alp_np"),
+                    concat!("prop_", $name, "_decimals_np"),
                 );
             points(6)
-                .add_prop_float(
+                .add_prop(
                     e,
-                    FloatEncoding::Alp,
                     $opt(
                         "val",
                         vec![Some(-0.75), None, Some(0.25), Some(1.5), None, Some(-2.25)],
@@ -2188,36 +2085,31 @@ fn generate_float_codecs(w: &mut SynthWriter) {
                 .write_per_version(
                     w,
                     concat!("prop_", $name, "_decimals-rust"),
-                    concat!("prop_", $name, "_alp"),
+                    concat!("prop_", $name, "_decimals"),
                 );
             points(6)
-                .add_prop_float(
-                    e,
-                    FloatEncoding::Alp,
-                    $val("val", vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0]),
-                )
+                .add_prop(e, $val("val", vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0]))
                 .write_per_version(
                     w,
                     concat!("prop_", $name, "_whole_np-rust"),
-                    concat!("prop_", $name, "_alp_whole_np"),
+                    concat!("prop_", $name, "_whole_np"),
                 );
         };
     }
 
-    float_codec_fixtures!("f32", f32, P::f32, P::opt_f32);
-    float_codec_fixtures!("f64", f64, P::f64, P::opt_f64);
+    float_fixtures!("f32", f32, P::f32, P::opt_f32);
+    float_fixtures!("f64", f64, P::f64, P::opt_f64);
 
-    // Long enough for FastPFOR to beat varint, and far enough from zero that only the
-    // frame of reference keeps the offsets narrow. The short fixtures above reach neither.
+    // Far from zero, so only a frame of reference would keep scaled integers narrow.
     let elevations: Vec<f64> = (0..300)
         .map(|i| 52_500_000.0 + f64::from(i % 97) * 0.25)
         .collect();
     points(300)
-        .add_prop_float(e, FloatEncoding::Alp, P::f64("val", elevations))
+        .add_prop(e, P::f64("val", elevations))
         .write_per_version(
             w,
             "prop_f64_offset_decimals_np-rust",
-            "prop_f64_alp_offset_np",
+            "prop_f64_offset_decimals_np",
         );
 }
 
@@ -2360,21 +2252,22 @@ fn generate_props_str(w: &mut SynthWriter) {
             "props_str_fsst_front_dict_nulls",
         );
 
-    // Three dictionary entries, so a code fits in two bits and the six of them
-    // cross a byte boundary and leave a partial one.
-    // The order is shuffled, since a run or a delta of codes would say nothing about packing.
-    // v1 has no code for bit packing, so its sibling holds the same codes as varints.
+    // Three dictionary entries in shuffled order, so no run or delta of codes helps.
     let shuffled = || [1, 3, 2, 3, 1, 2].map(prefixed);
     six_points()
-        .add_prop_str_dict(e, E::bitpacked(), P::str("val", shuffled()))
+        .add_prop_str_dict(e, e, P::str("val", shuffled()))
         .write_per_version(
             w,
             "props_offset_str_shuffled_np-rust",
-            "props_str_dict_bp_np",
+            "props_str_dict_shuffled_np",
         );
     six_points()
-        .add_prop_str_dict(e, E::bitpacked(), P::opt_str("val", shuffled().map(Some)))
-        .write_per_version(w, "props_offset_str_shuffled-rust", "props_str_dict_bp");
+        .add_prop_str_dict(e, e, P::opt_str("val", shuffled().map(Some)))
+        .write_per_version(
+            w,
+            "props_offset_str_shuffled-rust",
+            "props_str_dict_shuffled",
+        );
 }
 
 fn generate_shared_dictionaries(w: &mut SynthWriter) {
@@ -2635,18 +2528,16 @@ fn generate_shared_dictionaries(w: &mut SynthWriter) {
         .no_v2()
         .write(w, "props_shared_dict_presence_variants");
 
-    // Each child's codes are a stream of its own, so one can pack them into two bits
-    // each while the other writes a varint apiece.
-    // The corpus lengths follow the first child's encoder, keeping this fixture about the codes.
+    // Each child's codes are a stream of its own, over the one dictionary.
     let zone = |i: usize| format!("{}_zone_{i}", "A".repeat(28));
     let cycle = move |offset: usize| (0..6).map(move |i| zone((i + offset) % 3));
     points(6)
         .add_shared_dict(
             SharedDict::new("name:", StrEncoding::Plain)
                 .col("de", E::varint(), cycle(0))
-                .col("en", E::bitpacked(), cycle(1)),
+                .col("en", E::varint(), cycle(1)),
         )
-        .write_per_version(w, "props_shared_dict_codes-rust", "props_shared_dict_bp");
+        .write_per_version(w, "props_shared_dict_codes-rust", "props_shared_dict_codes");
 }
 
 /// Elevations on Terrain-RGB's grid of 10^-1 m, whose `0` is its base of -10000 m.

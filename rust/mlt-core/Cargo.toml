@@ -22,11 +22,6 @@ harness = false
 required-features = ["__private-v2"]
 
 [[bench]]
-name = "rans_isolated"
-harness = false
-required-features = ["__private-v2"]
-
-[[bench]]
 name = "encoding_e2e"
 harness = false
 required-features = ["__private"]
@@ -47,14 +42,11 @@ harness = false
 required-features = ["__private"]
 
 [features]
-default = ["fastpfor", "fsst", "rans", "bitpack", "predicted"]
-# Decoder support for each optional codec. A build without one rejects streams that use it,
-# so a decoder can leave out codecs its tiles are never encoded with.
+default = ["fastpfor", "fsst", "compressed-selection"]
+# Decoder support for each extension codec. A build without one rejects streams that use it,
+# so a decoder for tiles served with transport compression can leave them out.
 fastpfor = []
 fsst = []
-rans = []
-bitpack = []
-predicted = []
 # Let the encoder rank competing encodings by their deflated size, see `EncoderConfig::with_compressed_selection`
 compressed-selection = ["dep:flate2"]
 arbitrary = ["dep:arbitrary", "geo-types/arbitrary"]

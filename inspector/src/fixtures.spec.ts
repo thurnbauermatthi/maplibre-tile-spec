@@ -349,7 +349,7 @@ describe("axisRows", () => {
     const logical = axisRows(odd, odd).find((r) => r.key === "logical");
     const names = logical?.values.map((v) => v.value) ?? [];
     expect(names.at(-1)).toBe("quantized");
-    expect(names.indexOf("alp")).toBeLessThan(names.indexOf("quantized"));
+    expect(names.indexOf("predicted")).toBeLessThan(names.indexOf("quantized"));
   });
 
   it("lists only the extents the index holds, smallest first", () => {
@@ -453,9 +453,9 @@ describe("searchVocabulary", () => {
   const rows = axisRows(faceted, faceted);
 
   it("offers a chip for a word that is in no file name", () => {
-    const hits = searchVocabulary(rows, "alp");
+    const hits = searchVocabulary(rows, "predicted");
     expect(hits.map((h) => `${h.axis.key}:${h.value.value}`)).toEqual([
-      "logical:alp",
+      "logical:predicted",
     ]);
   });
 
@@ -469,7 +469,7 @@ describe("searchVocabulary", () => {
   });
 
   it("leaves out a chip that is already picked", () => {
-    const hits = searchVocabulary(rows, "alp", new Set(["logical:alp"]));
+    const hits = searchVocabulary(rows, "predicted", new Set(["logical:predicted"]));
     expect(hits).toEqual([]);
   });
 });
@@ -479,7 +479,7 @@ describe("coverageGaps", () => {
     const gaps = coverageGaps(axisRows(faceted, faceted));
     const keys = gaps.map((g) => axisKey(g.axis, g.value.value));
     expect(keys).toContain("geometry:multi-polygon");
-    expect(keys).toContain("logical:alp");
+    expect(keys).toContain("logical:predicted");
     expect(keys).not.toContain("geometry:point");
   });
 });

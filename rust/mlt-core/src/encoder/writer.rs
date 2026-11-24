@@ -9,8 +9,6 @@ use crate::decoder::LayerHeader02;
 #[cfg(feature = "unstable-v2")]
 use crate::decoder::stream::header02::{Count02, Family, WordWidth};
 use crate::decoder::{ColumnType, Morton};
-#[cfg(feature = "unstable-v2")]
-use crate::encoder::model::FloatEncoding;
 use crate::encoder::model::{CurveParams, ExplicitEncoder, StrEncoding, StreamCtx};
 use crate::encoder::{EncoderConfig, IntEncoder, Network, Profile, VertexBufferType};
 use crate::utils::BinarySerializer as _;
@@ -347,14 +345,6 @@ impl Encoder {
         self.explicit.as_ref().map(|e| (e.get_str_encoding)(name))
     }
 
-    /// When [`Self::explicit`] is [`Some`], returns the callback-chosen [`FloatEncoding`].
-    /// [`None`] means cost the float encodings the config allows against each other.
-    #[inline]
-    #[cfg(feature = "unstable-v2")]
-    pub(crate) fn override_float_enc(&self, name: &str) -> Option<FloatEncoding> {
-        self.explicit.as_ref().map(|e| (e.get_float_encoding)(name))
-    }
-
     /// Pinned vertex layout when an explicit encoder is active.
     #[inline]
     #[allow(clippy::unused_self)]
@@ -494,6 +484,7 @@ impl Encoder {
     }
 
     /// The size a candidate of `data` and `meta_len` metadata bytes is ranked by.
+    #[cfg(feature = "unstable-v2")]
     pub(crate) fn rank(&self, data: &[u8], meta_len: usize) -> usize {
         rank(self.cfg.compressed_selection(), data, meta_len)
     }

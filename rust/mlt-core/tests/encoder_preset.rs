@@ -86,24 +86,44 @@ fn the_min_size_preset_tries_hilbert_and_id_sorts() {
 }
 
 #[test]
-fn the_min_size_preset_allows_delta2_under_v2() {
-    let min_size_v2 =
-        EncoderConfig::from_profile(Profile::MinSize).with_wire_version(WireVersion::V02);
-    assert!(min_size_v2.allow_delta2());
+fn the_min_size_preset_allows_byte_rle_presence() {
+    let min_size = EncoderConfig::from_profile(Profile::MinSize);
+    assert!(min_size.allow_presence_rle());
 }
 
 #[test]
-fn the_min_size_preset_allows_rans_vertices_under_v2() {
-    let min_size_v2 =
-        EncoderConfig::from_profile(Profile::MinSize).with_wire_version(WireVersion::V02);
-    assert!(min_size_v2.allow_rans_vertices());
+fn the_web_preset_predicts_vertices_under_v2() {
+    let web_v2 = EncoderConfig::from_profile(Profile::Web(Network::Cellular4G))
+        .with_wire_version(WireVersion::V02);
+    assert!(web_v2.allow_predicted_vertices());
 }
 
 #[test]
-fn the_min_size_preset_allows_no_delta2_under_v1() {
-    let min_size_v1 =
-        EncoderConfig::from_profile(Profile::MinSize).with_wire_version(WireVersion::V01);
-    assert!(!min_size_v1.allow_delta2());
+fn the_web_preset_predicts_no_vertices_under_v1() {
+    let web_v1 = EncoderConfig::from_profile(Profile::Web(Network::Cellular4G))
+        .with_wire_version(WireVersion::V01);
+    assert!(!web_v1.allow_predicted_vertices());
+}
+
+#[test]
+fn the_web_preset_ranks_by_compressed_size() {
+    let web = EncoderConfig::from_profile(Profile::Web(Network::Cellular4G));
+    assert!(web.compressed_selection());
+}
+
+#[test]
+fn the_web_preset_keeps_presence_as_bitmaps() {
+    let web = EncoderConfig::from_profile(Profile::Web(Network::Cellular4G));
+    assert!(!web.allow_presence_rle());
+}
+
+#[test]
+fn the_web_preset_offline_is_the_uncompressed_profile() {
+    let offline = EncoderConfig::from_profile(Profile::Web(Network::Offline))
+        .with_wire_version(WireVersion::V02);
+    assert!(offline.allow_presence_rle());
+    assert!(!offline.allow_predicted_vertices());
+    assert!(!offline.compressed_selection());
 }
 
 #[test]
@@ -128,13 +148,6 @@ fn the_diffable_preset_switches_shared_dictionaries_off() {
 fn the_diffable_preset_keeps_fastpfor() {
     let diffable = EncoderConfig::from_profile(Profile::Diffable);
     assert!(diffable.allow_fastpfor());
-}
-
-#[test]
-fn the_diffable_preset_allows_delta2_under_v2() {
-    let diffable_v2 =
-        EncoderConfig::from_profile(Profile::Diffable).with_wire_version(WireVersion::V02);
-    assert!(diffable_v2.allow_delta2());
 }
 
 #[test]
@@ -187,15 +200,8 @@ fn the_fast_encoding_preset_switches_shared_dictionaries_off() {
 }
 
 #[test]
-fn the_fast_encoding_preset_allows_no_delta2_under_v2() {
+fn the_fast_encoding_preset_predicts_no_vertices_under_v2() {
     let fast_v2 =
         EncoderConfig::from_profile(Profile::FastEncoding).with_wire_version(WireVersion::V02);
-    assert!(!fast_v2.allow_delta2());
-}
-
-#[test]
-fn the_fast_encoding_preset_allows_no_rans_vertices_under_v2() {
-    let fast_v2 =
-        EncoderConfig::from_profile(Profile::FastEncoding).with_wire_version(WireVersion::V02);
-    assert!(!fast_v2.allow_rans_vertices());
+    assert!(!fast_v2.allow_predicted_vertices());
 }

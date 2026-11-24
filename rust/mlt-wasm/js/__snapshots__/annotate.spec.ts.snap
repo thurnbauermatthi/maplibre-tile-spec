@@ -630,14 +630,8 @@ exports[`annotateTile > annotates a v2 tile 1`] = `
       "bits": [
         {
           "hi": 7,
-          "lo": 7,
-          "meaning": "shared bitfields are bitmaps",
-          "raw": 0,
-        },
-        {
-          "hi": 6,
           "lo": 4,
-          "meaning": "shared presence bitfields = 0",
+          "meaning": "reserved",
           "raw": 0,
         },
         {
@@ -875,14 +869,5 @@ exports[`decodeBlob > decodes a string payload as text 1`] = `
 {
   "kind": "text",
   "value": "residential_zone_north_sector_1commercial_zone_south_sector_2industrial_zone_east_sector_3park_zone_west_sector_4water_zone_north_sector_5residential_zone_south_sector_6",
-}
-`;
-
-exports[`decodeBlob > hands Framed, Exception-Free ALP parameters across as a BigInt 1`] = `
-{
-  "base": -225n,
-  "e": 2,
-  "f": 0,
-  "kind": "alp",
 }
 `;

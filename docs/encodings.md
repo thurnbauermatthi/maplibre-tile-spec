@@ -18,12 +18,12 @@ This page defines what the bytes after the header mean.
 ## Integer Words
 
 Most of MLT is integers.
-Lengths, offsets, ids, dictionary codes, geometry topology and the vertex buffer are all streams of integer words, and so are the scaled integers of a [framed, exception-free ALP](#alp) float column.
+Lengths, offsets, ids, dictionary codes, geometry topology and the vertex buffer are all streams of integer words.
 
 An integer stream is decoded in two steps.
 The **physical** encoding turns the payload bytes into a sequence of unsigned words.
 The **logical** encoding turns those words into the values.
-A stream of `Int64`, `UInt64` or `LongId` values has 64-bit words, and so does a [framed, exception-free ALP](#alp) offset stream.
+A stream of `Int64`, `UInt64` or `LongId` values has 64-bit words.
 Every other integer stream has 32-bit words.
 
 ```
@@ -99,97 +99,55 @@ A 32-bit word takes 1 to 5 bytes and a 64-bit word 1 to 10.
 This is the unsigned varint of [Protocol Buffers](https://protobuf.dev/programming-guides/encoding/#varints) and the length prefix every MLT header uses.
 Signed values go through [zigzag](#zigzag) first, where the logical encoding says so.
 
-### Bit Packing <span class="experimental"></span> {#bit-packing}
-
-Every word is stored in the same number of bits, the bit width of the largest value.
-
-[View example](inspector/app/?fixture=0x02%2Fprops_str_dict_bp_np.mlt&at=codes){target=_blank .inspector-example} - dictionary codes `0` to `2`, each in two bits.
-
-Bit packing stands in for the whole physical step: the words come straight out of the packed bits, and only [zigzag](#zigzag) on a signed stream is applied to them.
-
-```
-payload := [u8 width]                        1-32
-           [u8 packed[ceil(count * width / 8)]]
-```
-
-Words are laid out LSB-first, end to end, so word `i` occupies bits `i * width` to `i * width + width - 1` of the byte run.
-Bits past the last word in the final byte are padding.
-Encoders write them as `0` and decoders MUST ignore them.
-`width` MUST be `1` to `32`.
-An empty or all-zero stream has `width = 1`.
-A payload whose length is not exactly `1 + ceil(count * width / 8)` MUST be rejected.
-
-=== "Bits"
-
-    --8<-- "diagrams/bit-packing.svg"
-
-=== "Values"
-
-    ```
-    values: [5, 1, 7, 0]           width = 3
-    bits:   101 001 111 000        value 0 = bits 0-2, value 1 = bits 3-5, ...
-    bytes:  0b11_001_101 = 0xCD    bits 0-7:  5, 1, and the low 2 bits of 7
-            0b0000_00_01 = 0x01    bits 8-15: the high bit of 7, 0, padding
-    payload: 03 CD 01
-    ```
-
-Bit packing beats varint when the values are of similar magnitude, since varint spends at least 8 bits per value.
-One large value raises the width for every value.
-An encoder SHOULD compare the stored size of both.
-
 ### FastPFOR {#fastpfor}
 
 A block codec that stores each block of words at the bit width most of them need, and patches the few words that need more from separate exception arrays.
-Unlike [bit packing](#bit-packing), it is not sensitive to a handful of outliers.
-It is described by [Lemire and Boytsov, *Decoding billions of integers per second through vectorization*](https://arxiv.org/pdf/1209.2137.pdf).
+A handful of outliers does not raise the width of the whole block.
+It is described by [Lemire and Boytsov, *Decoding billions of integers per second through vectorization*](https://arxiv.org/pdf/1209.2137.pdf), and MLT stores the layout of the `FastPFOR` and `VariableByte` composite of its reference libraries, with 256-value blocks.
+v1 and v2 use the same layout, for 32-bit values only.
+A stream of 64-bit words cannot use FastPFOR.
 
-[View example](inspector/app/?fixture=0x02%2Fids_fpf.mlt&at=column%5B0%5D){target=_blank .inspector-example} - an id stream in the v2 `128le` variant.
+[View example](inspector/app/?fixture=0x02%2Fids_fpf.mlt&at=column%5B0%5D){target=_blank .inspector-example} - an id stream in FastPFOR.
 
-v1 and v2 use different variants:
-
-| | v1 | v2 |
-|---|---|---|
-| Block size | 256 values | 128 values |
-| Packing | [Sequential](#fastpfor-packing), 32 values at a time | [Interleaved](#fastpfor-packing), 128 values at a time |
-| Word byte order | big-endian | little-endian |
-| Value width | 32 bits | 32 and 64 bits |
-
-The payload consists of whole 32-bit words, whatever the width of the values:
+The payload consists of whole 32-bit words, each stored big-endian:
 
 ```
-payload := [u32 block_values]          values in whole blocks, a multiple of 128
+payload := [u32 block_values]          values in whole blocks, a multiple of 256
            [page; ceil(block_values / 65536)]
            [u8 tail[...]]              the remaining values, variable-byte encoded
 ```
 
-`block_values` is the value count rounded down to a multiple of `128`.
-The values after the last whole block, at most `127`, are the [tail](#fastpfor-tail).
-A stream of fewer than `128` values has `block_values = 0`, no page, and only a tail.
+`block_values` is the value count rounded down to a multiple of `256`.
+The values after the last whole block, at most `255`, are the [tail](#fastpfor-tail).
+A stream of fewer than `256` values has `block_values = 0`, no page, and only a tail.
 A stream of zero values has an empty payload.
 A payload whose length is not a multiple of 4 MUST be rejected.
+
+The block metadata and the tail are bytes, packed four to a word with the first byte in the low 8 bits.
+Since the word is then stored big-endian, each group of four of those bytes appears reversed in the payload.
 
 --8<-- "diagrams/fastpfor-layout.svg"
 
 #### Pages
 
-A page holds up to `65536` values, which is `512` blocks.
+A page holds up to `65536` values, which is `256` blocks.
 Every page but the last is full.
 Exceptions are collected per page, so that the blocks of a page share one set of exception arrays.
 
 ```
 page := [u32 meta_offset]              words from this word to meta_size, 1 + the packed words
-        [packed block; blocks]         4 * width words each
+        [packed block; blocks]         8 * width words each
         [u32 meta_size]                bytes of block metadata
         [u8 meta[meta_size]]           zero-padded to whole words
-        [bitmap]                       1 word for u32 values, 2 words for u64, low word first
+        [u32 bitmap]
         [exception array; popcount(bitmap)]
 ```
 
 The metadata is one entry per block, in block order:
 
 ```
-block_meta := [u8 width]               0-32 for u32, 0-64 for u64
-              [u8 exceptions]          0-127
+block_meta := [u8 width]               0-32
+              [u8 exceptions]          0-255
               if exceptions > 0:
                 [u8 max_width]         bit width of the widest value in the block
                 [u8 position; exceptions]
@@ -197,9 +155,9 @@ block_meta := [u8 width]               0-32 for u32, 0-64 for u64
 
 `width` is the bit width the block is packed at.
 A value that needs more is an **exception**: its low `width` bits stay in the block, and its high bits go to an exception array.
-`position` is the index of the exception in the block, `0` to `127`, and encoders write the positions in ascending order.
+`position` is the index of the exception in the block, `0` to `255`, and encoders write the positions in ascending order.
 
-An exception array can exist for each width `k` from `2` to the value width, and bit `k - 1` of the bitmap says whether it does.
+An exception array can exist for each width `k` from `2` to `32`, and bit `k - 1` of the bitmap says whether it does.
 Array `k` holds the high bits of every exception in the page with `max_width - width = k`, in block order and then position order.
 
 ```
@@ -207,11 +165,11 @@ exception_array := [u32 count]
                    [count values at k bits each]
 ```
 
-The values of an array are packed in groups of 128 [interleaved](#fastpfor-packing), then the rest in groups of 32 [sequentially](#fastpfor-packing).
-The last 32-value group is padded with zero values, and the words the padding alone would fill are not written, so the remainder takes `ceil(remainder * k / 32)` words.
+The values of an array are [packed](#fastpfor-packing) in groups of 32.
+The last group is padded with zero values, and the words the padding alone would fill are not written, so an array takes `ceil(count * k / 32)` words.
 Arrays follow in ascending `k`.
 
-A block is decoded by unpacking its `128` values at `width` bits, then patching its exceptions:
+A block is decoded by unpacking its `256` values at `width` bits, then patching its exceptions:
 
 ```
 index = max_width - width
@@ -225,43 +183,19 @@ An exception that is a single bit wider than the block has no array: its high pa
 Every array has its own read position, which starts at its first value on each page.
 
 A decoder MUST reject
-- a `width` or `max_width` above the value width,
+- a `width` or `max_width` above `32`,
 - a `max_width` that is not above `width` where there are exceptions,
-- a `position` of `128` or more,
 - an exception without a value left in its array,
 - an array with more than `65536` values,
 - and a payload that ends inside a page.
 
 #### Packing {#fastpfor-packing}
 
-=== "Interleaved"
+32 values at `k` bits each are one continuous LSB-first bit stream of `k` words: value `j` occupies bits `j * k` to `j * k + k - 1`, with bit `i` of the stream being bit `i mod 32` of word `i / 32`.
+A block is 8 such groups, and an exception array as many as it needs.
+A `width` of `0` takes no words, and every value is `0`.
 
-    A **group** is 128 values packed at `width` bits into `4 * width` words, and a v2 block is one group.
-    It is laid out for a 128-bit vector register: 4 lanes of `u32`, or 2 lanes of `u64`.
-
-    Value `i` belongs to lane `i mod lanes` and row `i / lanes`.
-    Each lane is packed on its own, LSB-first, at `width` bits per value: row `r` occupies bits `r * width` to `r * width + width - 1` of the lane's bits.
-    A lane has `128 / lanes` rows of `width` bits, which is exactly `width` words of the lane's own width.
-    The group stores word `w` of every lane as one 128-bit vector, for `w = 0` to `width - 1`:
-
-    - for `u32`, lane `l` of vector `w` is the word at `4 * w + l`,
-    - for `u64`, lane `l` of vector `w` is the pair of words at `4 * w + 2 * l` and `4 * w + 2 * l + 1`, low half first.
-
-    A `width` of `0` takes no words, and every value is `0`.
-
-    --8<-- "diagrams/fastpfor-interleave.svg"
-
-    Because every lane has the same bit offsets, one shift, one mask and one OR move `lanes` values at once, and no value crosses lanes.
-    A decoder without vector instructions loops over the lanes and reads the same bytes.
-
-=== "Sequential"
-
-    32 values at `k` bits each are one continuous LSB-first bit stream of `k` words: value `j` occupies bits `j * k` to `j * k + k - 1`, with bit `i` of the stream being bit `i mod 32` of word `i / 32`.
-    v1 packs every block this way, 32 values at a time.
-    v2 uses it only for the remainder of an exception array.
-    A `u64` value of up to `64` bits crosses word boundaries like any other.
-
-    --8<-- "diagrams/fastpfor-sequential.svg"
+--8<-- "diagrams/fastpfor-sequential.svg"
 
 #### Tail {#fastpfor-tail}
 
@@ -269,8 +203,7 @@ The tail is variable-byte encoded, with no count and no header.
 Each value is stored in 7-bit groups, least significant group first, and bit 7 of its **last** byte is set.
 This is the reverse of [varint](#varint), where bit 7 marks a byte that is followed by another.
 
-A `u32` takes 1 to 5 bytes, and the fifth carries the top 4 bits.
-A `u64` takes 1 to 10.
+A value takes 1 to 5 bytes, and the fifth carries the top 4 bits.
 The bytes are padded with `0x00` to a multiple of 4.
 A padding byte has bit 7 clear, so it never ends a value, and a decoder discards the unfinished value at the end.
 A decoder reads until the payload ends, and the number of values it read MUST be the stream's value count minus `block_values`.
@@ -282,25 +215,32 @@ The reference encoder counts the values of a block by bit length and tries each 
 With `e` values wider than `width`, it costs
 
 ```
-128 * width + e * 8 + e * (max_width - width) + 8        bits
+256 * width + e * 8 + e * (max_width - width) + 8        bits
 ```
 
 for the packed block, the position bytes, the exception bits and the `max_width` byte.
-It picks the cheapest, and `max_width` itself when no smaller width beats `128 * max_width`.
+It picks the cheapest, and `max_width` itself when no smaller width beats `256 * max_width`.
 It never picks a `width` that makes every value an exception.
 
 #### Example
 
-Take 130 `u32` values, `i mod 8` for `i` from `0`, except `300` at `5`, `20` at `77`, `5` at `128` and `200` at `129`.
-The first 128 fit in `3` bits except two, so `width = 3` and `max_width = 9`.
+Take 258 values, `i mod 8` for `i` from `0`, except `300` at `5`, `20` at `77`, `5` at `256` and `200` at `257`.
+The first 256 fit in `3` bits except two, so `width = 3` and `max_width = 9`.
 The last two are the tail.
+The payload is 33 words, as stored:
 
---8<-- "diagrams/fastpfor-example.svg"
-
-The same values as `u64` take 22 words, since the bitmap has two.
-
-In v2 a stream of 64-bit words, such as the offsets of a [framed, exception-free ALP](#alp) column, uses the `u64` form.
-v1 has no 64-bit FastPFOR, so a v1 stream of 64-bit words cannot use it.
+```
+00 00 01 00                 block_values   256
+00 00 00 19                 meta_offset    25: 1 + 24 packed words
+88 FA 46 88 ... FA C6 88 FA packed block   24 words, 256 values at 3 bits
+00 00 00 05                 meta_size      5 bytes
+05 09 02 03                 meta           bytes 03 02 09 05: width 3, 2 exceptions, max_width 9, at 5
+00 00 00 4D                                bytes 4D 00 00 00: and at 77, padded
+00 00 00 20                 bitmap         bit 5: k = 9 - 3 = 6
+00 00 00 02                 count          2
+00 00 00 A5                 array 6        37 and 2 at 6 bits each: 300 >> 3 and 20 >> 3
+00 81 48 85                 tail           bytes 85 48 81 00: 5, then 200, padded
+```
 
 ## Logical Encodings
 
@@ -335,38 +275,6 @@ words:  [200, 10, 5]           zigzag
 ```
 
 Delta suits monotonic sequences such as ids and offsets, whose differences are small however large the values are.
-
-### Delta2 <span class="experimental"></span> {#delta2}
-
-Each word is the [delta](#delta) of the deltas.
-Both predecessors start at `0`, so the first two words are
-- `values[0]` and
-- `values[1] - 2 * values[0]`.
-
-Each second difference is [zigzag](#zigzag)-encoded, and the arithmetic wraps at the word width.
-
-Encoding is:
-```
-delta[i]  = values[i] - values[i - 1]      values[-1] = 0
-delta2[i] = delta[i] - delta[i - 1]        delta[-1] = 0
-```
-
-and decoding is:
-```
-delta[i] = delta[i - 1] + delta2[i]
-values[i] = values[i - 1] + delta[i]
-```
-
-!!! example
-
-    ```
-    values: [10, 13, 16, 20]
-    deltas: [10, 3, 3, 4]
-    delta2: [10, -7, 0, 1]
-    words:  [20, 13, 0, 2]         zigzag
-    ```
-
-Delta2 suits smooth sequences, such as a per-vertex elevation along a densely sampled line, whose steps change little from one to the next.
 
 ### RLE {#rle}
 
@@ -451,34 +359,10 @@ Bits past `count` in the final byte are padding and MUST be ignored.
     byte:   0b0010_1101 = 0x2D
     ```
 
-### Runs <span class="experimental"></span> {#bool-runs}
-
-Alternating run lengths as varints.
-The first counts the leading `0` bits and can be `0`.
-The lengths MUST sum to `count`.
-Runs is best for a bitfield that is set over contiguous blocks of values.
-
-```
-values:  [0, 0, 1, 1, 1, 0]
-payload: 02 03 01              2 zeros, 3 ones, 1 zero
-```
-
-### Sparse <span class="experimental"></span> {#bool-sparse}
-
-A summary bitmap with one bit per byte of the [bitmap](#bitmap), set where that byte is not zero, followed by the non-zero bytes in order.
-The summary is `ceil(ceil(count / 8) / 8)` bytes, and its bits past the last bitmap byte MUST be `0`.
-A stored byte MUST NOT be `0`.
-Sparse is best for a bitfield whose set bits are rare and do not clump.
-
-```
-bitmap:  00 2D 00              24 values
-summary: 02                    only byte 1 is non-zero
-payload: 02 2D
-```
-
 ### Boolean RLE {#boolean-rle}
 
 v1 compresses the [bitmap](#bitmap) with the byte-level run-length encoding of [ORC](https://orc.apache.org/specification/ORCv1/#byte-run-length-encoding).
+v2 keeps it as the `ByteRLE` [presence encoding](specification/v2.md#presence-encodings), an extension for tiles read without transport compression.
 The payload is a sequence of runs, each a control byte followed by the bytes it describes.
 
 [View example](inspector/app/?fixture=0x01%2Fids_opt.mlt&at=present){target=_blank .inspector-example} - five ids, one of them missing, as byte runs.
@@ -513,109 +397,9 @@ Both follow from `num_values`.
 ### Plain Floats {#plain-floats}
 
 IEEE 754 words, little-endian, 4 bytes for a `Float` and 8 for a `Double`.
-This is the only float encoding v1 has.
+This is the only float encoding v1 and v2 have.
 
 [View example](inspector/app/?fixture=0x02%2Fprop_f64_max_np.mlt&at=column%5B0%5D){target=_blank .inspector-example} - raw IEEE 754 words.
-
-### Framed, Exception-Free ALP <span class="experimental"></span> {#alp}
-
-Framed, Exception-Free ALP (Adaptive Lossless floating-Point compression) stores a float column as integers, which are then [physically encoded](#physical-encodings) like any other integer stream.
-
-[View example](inspector/app/?fixture=0x02%2Fprop_f32_alp_np.mlt&at=column%5B0%5D){target=_blank .inspector-example} - `-0.75` to `0.75`, stored as `-75` to `75` with `e = 2`.
-
-Most floats in map data are decimals with few significant digits, such as `12.75` or `0.3`, and are exactly representable as a scaled integer.
-Framed, Exception-Free ALP finds one decimal scale for the whole column and stores $i = \operatorname{round}(v \cdot 10^e / 10^f)$ per value.
-
-$e$ is the decimal exponent the values were scaled by, $0 \le e \le 18$.
-$f$ is the factor dividing out the trailing zeros $e$ introduced, $0 \le f \le e$.
-
-The parameters are two values in the stream header:
-
-| Parameter | Meaning |
-|---|---|
-| `scale` | One byte packing $e$ and $f$ as $\frac{e(e+1)}{2} + f$, from $0$ to $189$ |
-| `base` | Frame of reference: the smallest scaled integer in the column, ZigZag varint |
-
-`scale` numbers only the valid pairs, row by row.
-A 4-bit nibble for each of $e$ and $f$ would be simpler but cannot hold $e = 18$.
-Two 5-bit fields would not fit in a byte, while the $190$ valid pairs up to $(e, f) = (18, 18)$ do.
-A `scale` above $189$ MUST be rejected.
-
-To decode, $e$ is the largest integer with $\frac{e(e+1)}{2} \le \mathit{scale}$, and $f$ is what remains:
-
-$$
-e = \left\lfloor \frac{\sqrt{8 \cdot \mathit{scale} + 1} - 1}{2} \right\rfloor
-\qquad
-f = \mathit{scale} - \frac{e(e+1)}{2}
-$$
-
-The square root is exact enough in double precision for every valid `scale`.
-
---8<-- "diagrams/alp-scale.svg"
-
-The payload holds unsigned offsets from `base`, so the smallest is `0` and every value is non-negative.
-The offsets are an ordinary unsigned integer stream and carry their own physical encoding.
-The stream's words are 64-bit.
-
-**Decoding**: $i = \mathit{base} + \mathit{offset}$, in 64-bit integer arithmetic, then $v = i \cdot 10^f \cdot 10^{-e}$, with $10^{-e}$ the nearest double and not an exact division.
-
-The sum MUST be formed as an integer before the conversion.
-A column spanning $[-2, 2^{53} - 1]$ has an offset of $2^{53} + 1$, which a double cannot hold.
-
-$e$ and $f$ are stored separately instead of as a single $10^{e - f}$.
-Scaling up by $10^e$ and then down by $10^f$ rounds twice, and some values are only exactly representable with $f > 0$.
-
-!!! important "Rounding"
-    An encoder MUST decode every value back and compare bit patterns.
-    If any value does not round-trip exactly, the encoder MUST use another encoding.
-
-$e$ is at most $18$ so that $v \cdot 10^e$ fits in an `i64`.
-
-!!! NOTE
-    The reference Rust encoder currently emits only scaled integers with $|i| \le 2^{53} - 1$, where consecutive doubles are at most $1$ apart.
-    Beyond that, floating-point scaling can land on a neighboring integer that still passes its own round-trip check.
-    This is a limitation of that implementation, not of the format.
-
-=== "Offsets"
-
-    --8<-- "diagrams/alp.svg"
-
-=== "Values"
-
-    ```
-    values:  [-0.75, 0.25, 1.5, -2.25]
-    e = 2, f = 0:  i = [-75, 25, 150, -225]
-    base = -225:   offsets = [150, 250, 375, 0]
-    ```
-
-The header stores `e = 2`, `f = 0` as the `scale` byte `03` and `base` as the ZigZag varint `c1 03`, and the payload stores the four offsets as varints.
-See the [framed, exception-free ALP example](specification/v2.md#examples) on the v2 page for the whole layer.
-
-### Float Dictionary <span class="experimental"></span> {#float-dictionary}
-
-The distinct values are stored once, and a stream of codes holds one index into them per element.
-
-[View example](inspector/app/?fixture=0x02%2Fprop_f32_dict_nan_np.mlt&at=column%5B0%5D){target=_blank .inspector-example} - repeated floats, `NaN` among them.
-
-The column has two streams.
-The first is the codes: an integer stream of 32-bit words, logical `Dict` in the `Float` family, with its own physical encoding.
-The second is the dictionary: [plain floats](#plain-floats), one per distinct value, with an explicit count in its header.
-
-=== "Codes"
-
-    --8<-- "diagrams/float-dictionary.svg"
-
-=== "Values"
-
-    ```
-    values: [1.5, 0.25, 1.5, 1.5, 0.25]
-    codes:  [0, 1, 0, 0, 1]
-    dict:   [1.5, 0.25]
-    ```
-
-Entries are distinct by bit pattern.
-`-0.0` and `0.0` are two entries, and a `NaN` is never equal to any entry.
-A code at or past the dictionary's count MUST be rejected.
 
 ## Strings {#strings}
 
@@ -679,7 +463,7 @@ Only the reconstructed entry has to be valid UTF-8.
 
 Front coding can be combined with [FSST](#fsst).
 The corpus is front-coded first and then FSST-compressed.
-An encoder SHOULD compare the stored size of each combination.
+An encoder SHOULD rank the combinations as [choosing encodings](specification/v2.md#choosing-encodings) says.
 
 ### FSST {#fsst}
 
@@ -732,7 +516,7 @@ A decoder reads the table from the stream, so this only matters when comparing t
 The distinct values are stored once, and a code names one of them per element.
 Repeated values such as a city or a country cost one code instead of their bytes.
 
-[View example](inspector/app/?fixture=0x02%2Fprops_str_dict_bp_np.mlt&at=codes){target=_blank .inspector-example} - three distinct strings and one code per feature.
+[View example](inspector/app/?fixture=0x02%2Fprops_str_dict_shuffled_np.mlt&at=codes){target=_blank .inspector-example} - three distinct strings and one code per feature.
 
 The codes are an unsigned integer stream, so any [logical](#logical-encodings) and [physical](#physical-encodings) encoding can compress them.
 The dictionary is a byte blob, [plain](#plain-bytes), [front-coded](#front-coding) or [FSST](#fsst)-compressed.
@@ -752,7 +536,7 @@ A dictionary beats plain strings once values repeat, and loses when they are mos
 Several string columns, such as `name:en`, `name:de` and `name:fr`, index into one dictionary.
 The dictionary is written once, and each member column then stores only its presence and its codes.
 
-[View example](inspector/app/?fixture=0x02%2Fprops_shared_dict_bp.mlt&at=column%5B0%5D){target=_blank .inspector-example} - several columns reading one corpus.
+[View example](inspector/app/?fixture=0x02%2Fprops_shared_dict_codes.mlt&at=column%5B0%5D){target=_blank .inspector-example} - several columns reading one corpus.
 
 The dictionary can be plain, front-coded or FSST-compressed, as for a single column.
 See [v1](specification/v1.md#shared-dictionary-columns) and [v2](specification/v2.md#shared-dictionary-columns) for the group header each version writes.
@@ -783,19 +567,6 @@ words:    [200, 400, 10, 20, 5, 10]
 ```
 
 The v2 `Vertex` family also has a plain `Delta`, which is the integer [delta](#delta) over the flat word sequence and does not separate the components.
-
-### Componentwise Delta2 <span class="experimental"></span> {#componentwise-delta2}
-
-[Delta2](#delta2) of each coordinate, with `x` and `y` keeping separate predecessors.
-
-```
-vertices: (0, 0), (70, 1), (140, 3), (210, 6)
-deltas:   (0, 0), (70, 1), (70, 2), (70, 3)
-delta2:   (0, 0), (70, 1), (0, 1), (0, 1)
-words:    [0, 0, 140, 2, 0, 2, 0, 2]
-```
-
-
 
 ### Vertex Dictionary {#vertex-dictionary}
 
@@ -936,309 +707,12 @@ dict codes: [27, 30, 45]
 words:      [27, 3, 15]
 ```
 
-### rANS <span class="experimental"></span> {#rans}
-
-rANS entropy-codes the [componentwise deltas](#componentwise-delta) of a plain layout's vertex stream.
-A `VertexDict` stream MUST NOT use it.
-
-Each delta is split in two:
-
-- a **symbol**, which says roughly how large the delta is and its sign, and is coded with [rANS](https://arxiv.org/abs/1311.2540) so that frequent symbols take fewer bits,
-- the delta's low **raw bits**, which are close to random and stored as they are.
-
-The symbol frequencies are counted per **context**, so each delta is coded with a table built from similar deltas.
-The tables travel in the payload.
-
-To decode, a decoder:
-
-1. reads the depth and the tables,
-2. marks which vertices start a [run](#rans-runs), from the topology streams,
-3. per vertex, decodes the `dx` symbol, then the `dy` symbol in a context that depends on `dx`, then reads both deltas' raw bits,
-4. prefix-sums the deltas into coordinates, as for componentwise delta.
-
-#### How rANS decodes a symbol
-
-A table of precision `p` divides `2^p` slots among its symbols.
-Symbol `s` owns `freq(s)` consecutive slots, starting at `cum(s)`, the sum of the frequencies of the symbols below it.
-
-The decoder holds a state `x`, a 32-bit number.
-The low `p` bits of `x` are a slot, and the symbol owning that slot is the one decoded.
-The state then shrinks by about `log2(2^p / freq(s))` bits, so a symbol owning half the slots costs one bit, and one owning a quarter costs two.
-When the state drops below `2^16`, the next 16-bit word of the stream is shifted in from below.
-The state stays in `[2^16, 2^32)` between symbols.
-
-```
-slot = x & (2^p - 1)
-s    = the symbol whose slots hold slot
-x    = freq(s) * (x >> p) + slot - cum(s)
-if x < 2^16: x = (x << 16) | next refill word of the lane
-```
-
-A table of precision `3`, decoding the state `0x10005`:
-
---8<-- "diagrams/rans-slots.svg"
-
-The state becomes `2 * 8192 + 5 - 4 = 16385`, two bits smaller, and is below `2^16`, so the next word is shifted in.
-
-A table of precision `0` has one slot and one symbol.
-Decoding from it leaves `x` unchanged and costs no bits.
-
-#### Why rANS compresses {#rans-math}
-
-A symbol of probability $P$ carries $\log_2 \frac{1}{P}$ bits of information.
-A table approximates $P(s)$ as $\frac{\mathit{freq}(s)}{2^p}$, so the ideal cost of $s$ is $\log_2 \frac{2^p}{\mathit{freq}(s)}$ bits.
-
-The state $x$ holds the symbols encoded so far in about $\log_2 x$ bits.
-Encoding $s$ maps $x$ to
-
-$$
-x' = 2^p \left\lfloor \frac{x}{\mathit{freq}(s)} \right\rfloor + \mathit{cum}(s) + (x \bmod \mathit{freq}(s))
-$$
-
-so $x' \approx x \cdot \frac{2^p}{\mathit{freq}(s)}$, and $\log_2 x$ grows by the ideal cost of $s$.
-
-With every frequency `1` this is $x' = 2^p x + s$, which appends $s$ as a digit of $x$ in base $2^p$, and every symbol costs $p$ bits.
-rANS instead gives $s$ the $\mathit{freq}(s)$ digit values from $\mathit{cum}(s)$ on.
-The digit is $\mathit{cum}(s) + (x \bmod \mathit{freq}(s))$, so it carries $\log_2 \mathit{freq}(s)$ bits of $x$.
-
-The decoder finds $s$ as the symbol whose slots hold the digit $x' \bmod 2^p$.
-The quotient $\lfloor x' / 2^p \rfloor$ is $\lfloor x / \mathit{freq}(s) \rfloor$, and the digit's offset into those slots is $x \bmod \mathit{freq}(s)$, so the decoder rebuilds $x$ exactly.
-Every $x'$ decodes to exactly one pair of $x$ and $s$.
-
-The last symbol encoded is the lowest digit and is decoded first, so the [encoder](#rans-encoding) codes each lane in reverse.
-
-Encoding symbol `3` of the table above into $x = 16385$ gives the state the decoder started from:
-
-$$
-x' = 8 \left\lfloor \frac{16385}{2} \right\rfloor + 4 + (16385 \bmod 2) = 8 \cdot 8192 + 5 = 65541 = \mathtt{0x10005}
-$$
-
-$x$ grows by $\log_2 \frac{65541}{16385} \approx 2 = \log_2 \frac{8}{2}$ bits.
-
-If symbol $s$ occurs $n(s)$ times among the $N$ symbols of a context, that context costs on average
-
-$$
-\sum_s \frac{n(s)}{N} \log_2 \frac{2^p}{\mathit{freq}(s)}
-$$
-
-bits per symbol.
-It is lowest when $\frac{\mathit{freq}(s)}{2^p} = \frac{n(s)}{N}$ for every $s$, and is then the entropy $\sum_s \frac{n(s)}{N} \log_2 \frac{N}{n(s)}$.
-A low precision rounds the frequencies further from the counts and costs more per symbol, and a high one costs more table bits.
-
-#### Renormalization {#rans-renormalization}
-
-The state stays in $[2^{16}, 2^{32})$.
-The encoder shifts 16-bit words out of the state into its lane, and the decoder shifts them back in.
-
-Before encoding $s$, the encoder shifts words out until $x < \mathit{freq}(s) \cdot 2^{32 - p}$, so that $x' < 2^{32}$.
-A shift divides $x$ by $2^{16}$, and the interval $[\mathit{freq}(s) \cdot 2^{16 - p}, \mathit{freq}(s) \cdot 2^{32 - p})$ spans exactly that factor.
-So $x$ lands in it after a unique number of shifts, and $x' \ge 2^{16}$.
-
-Decoding from $x \ge 2^{16}$ leaves $x \ge \mathit{freq}(s) \cdot 2^{16 - p} \ge 2^{16 - p}$.
-Since $p \le 11$, one refill word brings $x$ back to at least $2^{16}$.
-
-[*Asymmetric numeral systems*](https://arxiv.org/abs/1311.2540) by Duda proves these properties, and [*rANS*](https://reearth.engineering/posts/r-ans-en/) by Re:Earth derives them with small decimal examples.
-
-#### Runs {#rans-runs}
-
-The first vertex of a ring, part or geometry jumps from the last vertex of the one before it, so its delta is much larger than the others.
-Such a vertex is encoded in contexts of its own.
-
-A run is the vertex range
-- of each ring, else
-- of each part, else
-- of each geometry, taken from the deepest offset level the geometry section has.
-
-A layer with none of the three levels has one run per vertex.
-A vertex starts a run when it is the first of one.
-The runs MUST cover exactly the stream's `num_values` vertices.
-Because the runs come from the topology, the stream is decoded after the topology streams.
-
-#### Symbols
-
-Each delta is the wrapping 32-bit difference from the same coordinate of the previous vertex, as in componentwise delta, without ZigZag.
-
-The symbol keeps the bit length `len` of the magnitude and the `d` bits after its leading one.
-`d` is the stream's mantissa depth, `0` to `2`.
-The leading one is implied by `len`.
-The remaining low bits are the raw bits.
-This is the same split a float makes into exponent, mantissa and dropped precision.
-
-At depth `1`:
-
-=== "Bits"
-
-    --8<-- "diagrams/rans-symbol.svg"
-
-=== "Values"
-
-    | Delta | Binary | `len` | Kept bit | Raw bits | Symbol |
-    |---:|---:|---:|---:|---:|---:|
-    | `0` | | | | | `0` |
-    | `1` | `1` | `1` | | | `3` |
-    | `-1` | `1` | `1` | | | `4` |
-    | `2` | `10` | `2` | `0` | | `7` |
-    | `3` | `11` | `2` | `1` | | `9` |
-    | `-3` | `11` | `2` | `1` | | `10` |
-    | `5` | `101` | `3` | `0` | `1` | `11` |
-    | `100` | `1100100` | `7` | `1` | `00100` | `29` |
-
-Positive deltas get odd symbols and negative ones the even symbol above.
-A magnitude with fewer than `d` bits after its leading one makes the unused mantissa positions `0`.
-
-```
-delta = 0:  symbol 0, no raw bits
-otherwise:  m = |delta|                       as an unsigned 32-bit value
-            len = bit length of m             1-32
-            k = min(len - 1, d)               mantissa bits the symbol keeps
-            raw_bits = len - 1 - k
-            mantissa = (m >> raw_bits) & (2^k - 1)
-            code = (len << d) | (mantissa << (d - k))
-            symbol = 2 * code - 1 if delta > 0, 2 * code if delta < 0
-            raw = the low raw_bits bits of m
-```
-
-Decoding reverses it:
-
-```
-symbol = 0:  delta 0
-otherwise:   code = ceil(symbol / 2)
-             len = code >> d
-             k = min(len - 1, d)
-             raw_bits = len - 1 - k
-             mantissa = (code & (2^d - 1)) >> (d - k)
-             m = ((2^k | mantissa) << raw_bits) | the next raw_bits raw bits
-             delta = m if symbol is odd, -m if it is even     wrapping, so m = 2^31 is i32::MIN
-```
-
-Symbols run up to `64` at depth `0`, `128` at depth `1` and `256` at depth `2`, the symbol of `i32::MIN`.
-The codes above it at depths `1` and `2` name no delta.
-A larger depth moves bits from the raw bits into the symbol, where a predictable bit costs less than one, at the price of larger tables.
-
-#### Contexts
-
-There are 14 contexts, each with its own table:
-
-| Context | Codes |
-|---|---|
-| `0` | `dx` inside a run |
-| `1` | `dx` at a run start |
-| `2 + 2c + s` | `dy`, where `c` is `dx`'s `len` capped at `5`, `0` for a zero `dx`, and `s` is `1` at a run start |
-
-`dx` and `dy` of a vertex tend to be of similar size, so the `dy` table is picked by how large `dx` was.
-
-A polygon with a hole:
-
---8<-- "diagrams/rans-runs.svg"
-
-#### Payload
-
-```
-payload := [u8 depth]           0-2
-           [tables]             bit-packed LSB-first, padded to a byte
-           [varint lane_len; 4]
-           [lane; 4]
-           [raw bits]           LSB-first, padded to a byte
-```
-
-The tables are one per context, in context order:
-
-```
-table := [1 bit present]
-         if present:
-           [4 bits precision]   0-11
-           [9 bits max_symbol]  0-256
-           if precision > 0:
-             [gamma(freq + 1)] for every symbol 0..=max_symbol
-```
-
-`gamma(v)` is Elias gamma, LSB-first: `z` zero bits, a one bit, then the low `z` bits of `v`, where `z` is the bit length of `v` minus one.
-A zero frequency is `gamma(1)`, a single one bit.
-`z` above `12` MUST be rejected.
-
-A table of precision `0` has no frequencies on the wire.
-Its only symbol is `max_symbol`, with frequency `1`.
-
-The frequencies MUST sum to `2^precision`, the frequency of `max_symbol` MUST be non-zero, and a symbol with a non-zero frequency MUST be one that some delta maps to at the stream's depth.
-
-#### Lanes
-
-Four rANS states decode in parallel, each with a lane of its own.
-Vertex `i` codes `dx` on lane `2 * (i mod 2)` and `dy` on lane `2 * (i mod 2) + 1`, so even vertices use lanes `0` and `1`, and odd vertices lanes `2` and `3`.
-A lane is its state's initial value as a little-endian `u32`, then the little-endian `u16` refill words in the order they are read.
-Its length MUST be even and at least `4`.
-
-The raw bits are one stream shared by all lanes, read in vertex order: `dx`'s raw bits, then `dy`'s.
-
-The symbols and raw bits of the example below:
-
---8<-- "diagrams/rans-lanes.svg"
-
-```
-x_prev = y_prev = 0
-for i in 0..vertex_count:
-    s  = 1 if vertex i starts a run, else 0
-    a  = 2 * (i mod 2)
-    sx = decode a symbol on lane a,     from context s
-    sy = decode a symbol on lane a + 1, from context 2 + 2 * min(ceil(sx / 2) >> d, 5) + s
-    x_prev = x_prev + delta(sx)           reads dx's raw bits, wrapping
-    y_prev = y_prev + delta(sy)           reads dy's raw bits, wrapping
-    output x_prev, y_prev
-```
-
-A decoder MUST reject a symbol from a context without a table, a lane that does not end on state `2^16` with every word read, and raw bits whose byte length is not exactly the number of bytes the raw bit reads need.
-
-#### Encoding {#rans-encoding}
-
-rANS is last in, first out, so an encoder codes each lane's symbols in reverse, starting every state at `2^16`:
-
-```
-while x >= freq(s) * 2^(32 - p): emit x & 0xFFFF; x = x >> 16
-x = ((x / freq(s)) << p) + x mod freq(s) + cum(s)
-```
-
-A lane is the final state, then the emitted words in reverse order.
-The final state is where decoding starts, and decoding every symbol returns it to `2^16`.
-
-An encoder SHOULD pick the depth and precisions that make the stream shortest, and SHOULD compare its stored size with componentwise delta.
-
-!!! example
-
-    The vertices `(100, 200)`, `(105, 210)`, `(102, 215)` as one run, at depth `1`:
-
-    | Vertex | Lanes | `dx` | Symbol | Context | Raw bits | `dy` | Symbol | Context | Raw bits |
-    |---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-    | `0` | `0`, `1` | `100` | `29` | `1` | `00100` | `200` | `33` | `13` | `001000` |
-    | `1` | `2`, `3` | `5` | `11` | `0` | `1` | `10` | `15` | `8` | `10` |
-    | `2` | `0`, `1` | `-3` | `10` | `0` | | `5` | `11` | `6` | `1` |
-
-    Context `0` holds symbols `10` and `11`, once each, and gets precision `1` with one slot per symbol.
-    Contexts `1`, `6`, `8` and `13` hold a single symbol each and get precision `0`.
-    The other nine contexts are absent.
-
-    Only context `0` changes a state.
-    Lane `0` starts at `0x20000`, decodes `29` for free, then slot `0x20000 & 1 = 0`, symbol `10`, and ends on `1 * (0x20000 >> 1) + 0 - 0 = 0x10000`.
-    Lane `2` starts at `0x20001`, slot `1`, symbol `11`, and ends on `1 * 0x10000 + 1 - 1 = 0x10000`.
-    Lanes `1` and `3` start and end at `0x10000`.
-    No state drops below `2^16`, so no lane has refill words.
-
-    ```
-    depth:    01
-    tables:   63 C1 FF 52 E8 00 61 81 F0 00 42 08     95 bits, padded
-    lanes:    04 04 04 04                            four lanes of 4 bytes
-              00 00 02 00                            lane 0: 0x00020000
-              00 00 01 00                            lane 1: 0x00010000
-              01 00 02 00                            lane 2: 0x00020001
-              00 00 01 00                            lane 3: 0x00010000
-    raw bits: 04 69                                  15 bits: 4, 8, 1, 2, 1, padded
-    ```
-
 ### Predicted <span class="experimental"></span> {#predicted}
 
 Predicted vertices store each vertex of a plain layout's vertex stream as what a guess from the vertices decoded before it misses, or as a copy of vertices decoded before it.
 A `VertexDict` stream MUST NOT use it, and neither may an [`(x, y, z)`](specification/v2.md#z-coordinates) stream.
 
-Unlike [rANS](#rans), it does no entropy coding of its own.
+It does no entropy coding of its own.
 Its residuals are bytes, grouped by the kind of vertex they belong to, so that the gzip, brotli or zstd a tile is served with sees homogeneous byte-aligned symbols.
 Every step is integer arithmetic, so every platform decodes the same bits.
 
@@ -1246,13 +720,13 @@ The guesses follow the shape of map geometry:
 
 - a ring or line starts near where the previous ring or line started, or, with starts from ends, where the previous run ended, which fits road networks stored as chained segments,
 - the fourth vertex of a four-vertex ring completes a parallelogram,
-- with frames, every later edge is stored in the frame of the edge before it, so the corner of a building or the bend of a road leaves one component near zero.
+- every other vertex is near the one before it.
 
 Neighbouring polygons share borders and roads share junctions, so a stretch of vertices an earlier ring or line already holds is stored as a copy of it, forwards or backwards.
 
 #### Runs and Classes {#predicted-runs}
 
-The runs are those of [rANS](#rans-runs): one per ring, else per part, else per geometry, from the deepest offset level of the geometry section.
+A run is the vertex range of each ring, else of each part, else of each geometry, taken from the deepest offset level the geometry section has.
 Each run takes its kind from the geometry type of the feature that owns it:
 
 | Feature type | Run kind |
@@ -1271,48 +745,13 @@ Vertex `i` of a run of length `len` belongs to one of six classes:
 |---:|---|---|---|
 | `0` | Start | `i = 0` of a Line or Ring run | the first vertex of the previous Line or Ring run, `(0, 0)` before the first; with starts from ends, the last vertex of the previous run of any kind, `(0, 0)` before the first |
 | `1` | Point | every vertex of a Point run | the vertex before it in the stream, `(0, 0)` before the first |
-| `2` | Ring | `i ≥ 1` of a Ring run, except a Corner | the vertex before it, in the frame of the edge before it when `i ≥ 2` and frames are on |
+| `2` | Ring | `i ≥ 1` of a Ring run, except a Corner | the vertex before it |
 | `3` | Corner | `i = 3` of a Ring run with `len = 4` | `v[0] + v[2] - v[1]`, the parallelogram |
 | `4` | Line1 | `i = 1` of a Line run | the vertex before it |
-| `5` | Line | `i ≥ 2` of a Line run | the vertex before it, in the frame of the edge before it when frames are on |
+| `5` | Line | `i ≥ 2` of a Line run | the vertex before it |
 
 The residual is the vertex minus its guess.
-For the classes guessed in a frame, the residual is the difference `d = v[i] - v[i - 1]` turned by the frame of the edge `u = v[i - 1] - v[i - 2]`.
 Coordinates and residuals are computed in at least 64-bit signed integers, and a decoded coordinate outside the 32-bit signed range MUST be rejected.
-
-#### Frames {#predicted-frames}
-
-The frame of an edge `u = (a0, b0) ≠ (0, 0)` is an exact integer rotation that turns `u` to within 0.71 degrees of the positive x axis.
-An edge of length zero has no frame, and a residual measured in it is `d` itself.
-
-The frame is a number `q` of clockwise quarter turns, then a turn by one of 128 directions built from three fixed-point shears.
-Shears map integers to integers and are undone exactly whatever their constants, so the rotation is lossless.
-All products stay below `2^53`, so a JavaScript `Number` holds them exactly.
-
-```
-turn(q, (x, y)) = (x, y), (y, -x), (-x, -y), (-y, x)   for q = 0, 1, 2, 3
-shear(k, v)     = floor((k * v + 2^15) / 2^16)         an arithmetic shift
-
-q      = if |b0| > |a0|: (1 if b0 > 0 else 3) else (0 if a0 > 0 else 2)
-(a, b) = turn(q, u)
-k      = number of THRESHOLDS[j] with |b| * 2^16 >= a * THRESHOLDS[j]
-sign   = -1 if b < 0 else 1
-t      = sign * TAN_HALF[k]
-s      = sign * SIN[k]
-
-forward(d):  (x, y) = turn(q, d); x1 = x + shear(t, y); y2 = y - shear(s, x1); return (x1 + shear(t, y2), y2)
-inverse(r):  (x3, y2) = r; x1 = x3 - shear(t, y2); y = y2 + shear(s, x1); return turn((4 - q) mod 4, (x1 - shear(t, y), y))
-```
-
-The constants are fixed tables, so they need not be computed with floating point:
-
-| Table | Values (`j` or `k` from `0`) | Defined as |
-|---|---|---|
-| `THRESHOLDS` | `1609, 4834, 8083, 11372, 14717, 18136, 21650, 25280, 29050, 32988, 37126, 41500, 46156, 51145, 56532, 62395` | `round(tan((j + 1/2) * pi / 64) * 2^16)` |
-| `TAN_HALF` | `0, 1609, 3220, 4834, 6455, 8083, 9721, 11372, 13036, 14717, 16416, 18136, 19880, 21650, 23449, 25280, 27146` | `round(tan(k * pi / 128) * 2^16)` |
-| `SIN` | `0, 3216, 6424, 9616, 12785, 15924, 19024, 22078, 25080, 28020, 30893, 33692, 36410, 39040, 41576, 44011, 46341` | `round(sin(k * pi / 64) * 2^16)` |
-
-The encoder stores `forward(d)`, and the decoder rebuilds `d` as `inverse(residual)`.
 
 #### Copies {#predicted-copies}
 
@@ -1329,8 +768,8 @@ payload := [u8 flags]
            [varint ops_length] [ops]        only when flags bit 0 is set
            residual_block * 6               classes 0 to 5, in code order
 
-flags          bit 0: an ops block follows, bit 1: frames are on, bit 2: starts from ends,
-               bits 3-7 MUST be 0
+flags          bit 0: an ops block follows, bit 2: starts from ends,
+               bit 1 and bits 3-7 are reserved and MUST be 0
 ops            per Line or Ring run, in stream order, also for a run of length 0:
                  [varint copy_count]
                  copy_count * ([varint gap] [varint (distance << 1) | backwards] [varint n - 2])
@@ -1358,20 +797,19 @@ for each run (len, kind):
              = prev_start + r                   Start, bit 2 clear
              = prev + r                         Start, bit 2 set
              = v[0] + v[2] - v[1] + r           Corner
-             = v[i-1] + inverse_u(r)            Ring or Line in a frame, u = v[i-1] - v[i-2]
              = v[i-1] + r                       otherwise
     if len > 0:
         prev_start = v[0], unless kind is Point
         prev = v[len - 1]
 ```
 
-An encoder SHOULD compare predicted vertices with componentwise delta and the vertex dictionary by the size they take after the transport compression the tile is served with, and SHOULD leave frames off for clients that decode in JavaScript or WebAssembly, where they roughly double the decode time per vertex for 1 to 1.5 % of brotli size.
+An encoder SHOULD compare predicted vertices with componentwise delta and the vertex dictionary by the size they take after the transport compression the tile is served with.
 It SHOULD try both start guesses the same way.
-Starts from ends pay off when each line begins where the one before it ended, as when an encoder that may reorder the parts of a `MultiLineString` walks a road network stored as segments through their shared endpoints: on the Bing Maps tiles of the evaluation, about a sixth of the brotli size of the line residuals.
+Starts from ends pay off when each line begins where the one before it ended, as in a road network stored as chained segments.
 
 !!! example
 
-    A square ring `(10, 10), (20, 10), (20, 20), (10, 20)`, then a line `(0, 0), (5, 0), (10, 1)`, frames off:
+    A square ring `(10, 10), (20, 10), (20, 20), (10, 20)`, then a line `(0, 0), (5, 0), (10, 1)`:
 
     | Vertex | Class | Guess | Residual | ZigZag |
     |---|---|---|---|---|
@@ -1384,7 +822,7 @@ Starts from ends pay off when each line begins where the one before it ended, as
     | `(10, 1)` | Line | `(5, 0)` | `(5, 1)` | `10, 2` |
 
     ```
-    flags:   00                   no copies, no frames
+    flags:   00                   no copies, starts from starts
     Start:   05 04 14 14 13 13
     Point:   01 00
     Ring:    05 04 14 00 00 14

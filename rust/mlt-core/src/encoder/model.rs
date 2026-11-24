@@ -397,15 +397,6 @@ impl WireVersion {
         }
     }
 
-    /// The `FastPFor` block size and word order used by this format.
-    #[must_use]
-    pub(crate) fn fastpfor_kind(self) -> FastPForKind {
-        match self {
-            Self::V01 => FastPForKind::Block256Be,
-            Self::V02 => FastPForKind::Block128Le,
-        }
-    }
-
     /// The RLE stream data layout used by this format.
     #[must_use]
     pub(crate) fn rle_layout(self) -> RleLayout {
@@ -441,20 +432,19 @@ pub enum Tessellation {
 /// Encoder defaults for one kind of tile consumer, which explicit settings override.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Profile {
-    /// `MapLibre GL JS`: no triangles, which it ignores, and no `FastPFOR` or `FSST` unless [`Network::Offline`], since they lose bytes after HTTP compression.
+    /// Tiles served with gzip, brotli or zstd, as `MapLibre GL JS` fetches them: no triangles,
+    /// which it ignores, no extensions, every competing encoding ranked by deflated size, and
+    /// under v2 predicted vertices. [`Network::Offline`] is the uncompressed profile instead:
+    /// the extensions, ranked by stored size.
     Web(Network),
     /// `MapLibre Native`: [`Tessellation::Auto`] on this network and every codec.
     Native(Network),
-    /// The fewest stored bytes: no triangles, Hilbert and feature-ID sort, and under v2 second-order deltas and rANS vertices.
+    /// The fewest stored bytes: no triangles, Hilbert and feature-ID sort, and every extension.
     MinSize,
-    /// Small binary diffs between releases: no triangles, no `FSST` or shared dictionaries, and under v2 second-order deltas.
+    /// Small binary diffs between releases: no triangles, no `FSST` or shared dictionaries.
     Diffable,
     /// The quickest encode: no triangles, sorts or optional codecs, so tiles come out larger.
     FastEncoding,
-    /// The smallest tiles once served with gzip, brotli or zstd, decoding to exactly the source:
-    /// no triangles, sorts, `FastPFOR`, `FSST`, rANS, bit-packing, second-order deltas, ALP or float
-    /// dictionaries, every competing encoding ranked by deflated size, and under v2 predicted vertices.
-    Compressed,
 }
 
 impl Default for Profile {
@@ -512,33 +502,18 @@ pub struct EncoderConfig {
     allow_fastpfor: bool,
     /// Allow string grouping into shared dictionaries
     allow_shared_dict: bool,
-    /// Allow the v2-only float dictionary encoding
+    /// Allow the v2 byte-RLE presence coding, an extension
     #[cfg(feature = "unstable-v2")]
-    allow_float_dict: bool,
-    /// Allow the v2-only Framed, Exception-Free ALP float encoding
-    #[cfg(feature = "unstable-v2")]
-    allow_float_alp: bool,
-    /// Allow the v2-only bit-packed physical encoding for dictionary code streams
-    #[cfg(feature = "unstable-v2")]
-    allow_packed_dict_codes: bool,
+    allow_presence_rle: bool,
     /// Code a nested struct's or map's row shapes instead of per-field presence or per-entry keys.
     #[cfg(feature = "unstable-v2")]
     allow_row_shapes: bool,
     /// Let a tessellated all-polygon layer store its triangles without the outlines.
     #[cfg(feature = "unstable-v2")]
     allow_triangles_only: bool,
-    /// Allow the v2-only second-order delta encodings of integer and vertex streams
-    #[cfg(feature = "unstable-v2")]
-    allow_delta2: bool,
-    /// Allow the v2-only rANS vertex encoding
-    #[cfg(feature = "unstable-v2")]
-    allow_rans_vertices: bool,
     /// Allow the v2-only predicted vertex encoding
     #[cfg(feature = "unstable-v2")]
     allow_predicted_vertices: bool,
-    /// Store predicted edges in the frame of the edge before them
-    #[cfg(feature = "unstable-v2")]
-    predicted_frames: bool,
     /// Allow the vertex dictionary layouts (Morton and Hilbert sorted dictionaries with offsets)
     allow_vertex_dict: bool,
     /// Rank competing encodings by their deflated size instead of their stored size
@@ -548,41 +523,7 @@ impl EncoderConfig {
     /// The settings `profile` picks, which the `with_*` methods override.
     #[must_use]
     pub fn from_profile(profile: Profile) -> Self {
-        // Float dictionaries and ALP stay off in every preset while they are still being measured.
         match profile {
-            Profile::Compressed => Self {
-                #[cfg(feature = "unstable-v2")]
-                wire_version: WireVersion::V01,
-                tessellation: Tessellation::Off,
-                attempt_spatial_morton_sort: false,
-                attempt_spatial_hilbert_sort: false,
-                attempt_id_sort: false,
-                allow_fsst: false,
-                allow_fastpfor: false,
-                allow_shared_dict: true,
-                #[cfg(feature = "unstable-v2")]
-                allow_float_dict: false,
-                #[cfg(feature = "unstable-v2")]
-                allow_float_alp: false,
-                #[cfg(feature = "unstable-v2")]
-                allow_row_shapes: false,
-                #[cfg(feature = "unstable-v2")]
-                allow_packed_dict_codes: false,
-                #[cfg(feature = "unstable-v2")]
-                allow_triangles_only: false,
-                #[cfg(feature = "unstable-v2")]
-                allow_delta2: false,
-                #[cfg(feature = "unstable-v2")]
-                allow_rans_vertices: false,
-                #[cfg(feature = "unstable-v2")]
-                allow_predicted_vertices: true,
-                // Frames save about 1.5 points of brotli but cost more decode time than the
-                // bytes they save take to transfer, even at 20 Mbit/s.
-                #[cfg(feature = "unstable-v2")]
-                predicted_frames: false,
-                allow_vertex_dict: true,
-                compressed_selection: true,
-            },
             Profile::Native(network) => Self {
                 #[cfg(feature = "unstable-v2")]
                 wire_version: WireVersion::V01,
@@ -594,57 +535,40 @@ impl EncoderConfig {
                 allow_fastpfor: true,
                 allow_shared_dict: true,
                 #[cfg(feature = "unstable-v2")]
-                allow_float_dict: false,
-                #[cfg(feature = "unstable-v2")]
-                allow_float_alp: false,
+                allow_presence_rle: true,
                 #[cfg(feature = "unstable-v2")]
                 allow_row_shapes: false,
                 #[cfg(feature = "unstable-v2")]
-                allow_packed_dict_codes: true,
-                #[cfg(feature = "unstable-v2")]
                 allow_triangles_only: false,
                 #[cfg(feature = "unstable-v2")]
-                allow_delta2: false,
-                #[cfg(feature = "unstable-v2")]
-                allow_rans_vertices: false,
-                #[cfg(feature = "unstable-v2")]
                 allow_predicted_vertices: false,
-                #[cfg(feature = "unstable-v2")]
-                predicted_frames: true,
                 allow_vertex_dict: true,
                 compressed_selection: false,
             },
-            Profile::Web(network) => Self {
-                #[cfg(feature = "unstable-v2")]
-                wire_version: WireVersion::V01,
-                tessellation: Tessellation::Off,
-                attempt_spatial_morton_sort: false,
-                attempt_spatial_hilbert_sort: false,
-                attempt_id_sort: false,
-                allow_fsst: network == Network::Offline,
-                allow_fastpfor: network == Network::Offline,
-                allow_shared_dict: true,
-                #[cfg(feature = "unstable-v2")]
-                allow_float_dict: false,
-                #[cfg(feature = "unstable-v2")]
-                allow_float_alp: false,
-                #[cfg(feature = "unstable-v2")]
-                allow_row_shapes: false,
-                #[cfg(feature = "unstable-v2")]
-                allow_packed_dict_codes: true,
-                #[cfg(feature = "unstable-v2")]
-                allow_triangles_only: false,
-                #[cfg(feature = "unstable-v2")]
-                allow_delta2: false,
-                #[cfg(feature = "unstable-v2")]
-                allow_rans_vertices: false,
-                #[cfg(feature = "unstable-v2")]
-                allow_predicted_vertices: false,
-                #[cfg(feature = "unstable-v2")]
-                predicted_frames: true,
-                allow_vertex_dict: true,
-                compressed_selection: false,
-            },
+            Profile::Web(network) => {
+                let uncompressed = network == Network::Offline;
+                Self {
+                    #[cfg(feature = "unstable-v2")]
+                    wire_version: WireVersion::V01,
+                    tessellation: Tessellation::Off,
+                    attempt_spatial_morton_sort: false,
+                    attempt_spatial_hilbert_sort: false,
+                    attempt_id_sort: false,
+                    allow_fsst: uncompressed,
+                    allow_fastpfor: uncompressed,
+                    allow_shared_dict: true,
+                    #[cfg(feature = "unstable-v2")]
+                    allow_presence_rle: uncompressed,
+                    #[cfg(feature = "unstable-v2")]
+                    allow_row_shapes: false,
+                    #[cfg(feature = "unstable-v2")]
+                    allow_triangles_only: false,
+                    #[cfg(feature = "unstable-v2")]
+                    allow_predicted_vertices: !uncompressed,
+                    allow_vertex_dict: true,
+                    compressed_selection: !uncompressed,
+                }
+            }
             Profile::MinSize => Self {
                 #[cfg(feature = "unstable-v2")]
                 wire_version: WireVersion::V01,
@@ -656,23 +580,13 @@ impl EncoderConfig {
                 allow_fastpfor: true,
                 allow_shared_dict: true,
                 #[cfg(feature = "unstable-v2")]
-                allow_float_dict: false,
-                #[cfg(feature = "unstable-v2")]
-                allow_float_alp: false,
+                allow_presence_rle: true,
                 #[cfg(feature = "unstable-v2")]
                 allow_row_shapes: false,
                 #[cfg(feature = "unstable-v2")]
-                allow_packed_dict_codes: true,
-                #[cfg(feature = "unstable-v2")]
                 allow_triangles_only: false,
                 #[cfg(feature = "unstable-v2")]
-                allow_delta2: true,
-                #[cfg(feature = "unstable-v2")]
-                allow_rans_vertices: true,
-                #[cfg(feature = "unstable-v2")]
                 allow_predicted_vertices: false,
-                #[cfg(feature = "unstable-v2")]
-                predicted_frames: true,
                 allow_vertex_dict: true,
                 compressed_selection: false,
             },
@@ -687,23 +601,13 @@ impl EncoderConfig {
                 allow_fastpfor: true,
                 allow_shared_dict: false,
                 #[cfg(feature = "unstable-v2")]
-                allow_float_dict: false,
-                #[cfg(feature = "unstable-v2")]
-                allow_float_alp: false,
+                allow_presence_rle: false,
                 #[cfg(feature = "unstable-v2")]
                 allow_row_shapes: false,
                 #[cfg(feature = "unstable-v2")]
-                allow_packed_dict_codes: true,
-                #[cfg(feature = "unstable-v2")]
                 allow_triangles_only: false,
                 #[cfg(feature = "unstable-v2")]
-                allow_delta2: true,
-                #[cfg(feature = "unstable-v2")]
-                allow_rans_vertices: false,
-                #[cfg(feature = "unstable-v2")]
                 allow_predicted_vertices: false,
-                #[cfg(feature = "unstable-v2")]
-                predicted_frames: true,
                 allow_vertex_dict: true,
                 compressed_selection: false,
             },
@@ -718,23 +622,13 @@ impl EncoderConfig {
                 allow_fastpfor: false,
                 allow_shared_dict: false,
                 #[cfg(feature = "unstable-v2")]
-                allow_float_dict: false,
-                #[cfg(feature = "unstable-v2")]
-                allow_float_alp: false,
+                allow_presence_rle: false,
                 #[cfg(feature = "unstable-v2")]
                 allow_row_shapes: false,
                 #[cfg(feature = "unstable-v2")]
-                allow_packed_dict_codes: true,
-                #[cfg(feature = "unstable-v2")]
                 allow_triangles_only: false,
                 #[cfg(feature = "unstable-v2")]
-                allow_delta2: false,
-                #[cfg(feature = "unstable-v2")]
-                allow_rans_vertices: false,
-                #[cfg(feature = "unstable-v2")]
                 allow_predicted_vertices: false,
-                #[cfg(feature = "unstable-v2")]
-                predicted_frames: true,
                 allow_vertex_dict: true,
                 compressed_selection: false,
             },
@@ -780,12 +674,8 @@ impl EncoderConfig {
     /// The `FastPFor` encoding to race, or `None` when `FastPFor` is switched off.
     #[must_use]
     pub(crate) fn fastpfor(self) -> Option<PhysicalEncoding> {
-        #[cfg(feature = "unstable-v2")]
-        let kind = self.wire_version.fastpfor_kind();
-        #[cfg(not(feature = "unstable-v2"))]
-        let kind = FastPForKind::Block256Be;
         self.allow_fastpfor
-            .then_some(PhysicalEncoding::FastPFor(kind))
+            .then_some(PhysicalEncoding::FastPFor(FastPForKind::Block256Be))
     }
 
     #[must_use]
@@ -817,18 +707,20 @@ impl EncoderConfig {
         return false;
     }
 
-    /// Whether float columns may use a dictionary, which only v2 can express.
+    /// Whether v2 presence bitfields may be byte-RLE coded, an extension.
     #[cfg(feature = "unstable-v2")]
     #[must_use]
-    pub fn allow_float_dict(self) -> bool {
-        self.allow_float_dict && self.wire_version != WireVersion::V01
+    pub fn allow_presence_rle(self) -> bool {
+        self.allow_presence_rle
     }
 
-    /// Whether float columns may use Framed, Exception-Free ALP, which only v2 can express.
+    /// Allow v2 presence bitfields and bool columns to store their bitmap byte-RLE coded, as v1 does.
+    /// An extension: tiles served with transport compression store the bitmap as it is.
     #[cfg(feature = "unstable-v2")]
     #[must_use]
-    pub fn allow_float_alp(self) -> bool {
-        self.allow_float_alp && self.wire_version != WireVersion::V01
+    pub fn with_presence_rle(mut self, enabled: bool) -> Self {
+        self.allow_presence_rle = enabled;
+        self
     }
 
     #[cfg(feature = "unstable-v2")]
@@ -857,21 +749,6 @@ impl EncoderConfig {
     #[must_use]
     pub fn with_triangles_only(mut self, enabled: bool) -> Self {
         self.allow_triangles_only = enabled;
-        self
-    }
-
-    /// Whether integer and vertex streams may store the deltas of their deltas, which only v2 can express.
-    #[cfg(feature = "unstable-v2")]
-    #[must_use]
-    pub fn allow_delta2(self) -> bool {
-        self.allow_delta2 && self.wire_version != WireVersion::V01
-    }
-
-    /// Allow integer and vertex streams to store the deltas of their deltas.
-    #[cfg(feature = "unstable-v2")]
-    #[must_use]
-    pub fn with_delta2(mut self, enabled: bool) -> Self {
-        self.allow_delta2 = enabled;
         self
     }
 
@@ -911,55 +788,6 @@ impl EncoderConfig {
         self
     }
 
-    /// Allow float columns to store one code per value into a dictionary of the distinct ones.
-    /// Off by default, and only v2 can express it.
-    /// A column takes it only when it comes out strictly smaller in stored bytes.
-    #[cfg(feature = "unstable-v2")]
-    #[must_use]
-    pub fn with_float_dict(mut self, enabled: bool) -> Self {
-        self.allow_float_dict = enabled;
-        self
-    }
-
-    /// Allow float columns to store each value as a decimal-scaled integer.
-    #[cfg(feature = "unstable-v2")]
-    #[must_use]
-    pub fn with_float_alp(mut self, enabled: bool) -> Self {
-        self.allow_float_alp = enabled;
-        self
-    }
-
-    /// Whether dictionary code streams may be stored bit-packed.
-    #[cfg(feature = "unstable-v2")]
-    #[must_use]
-    pub fn allow_packed_dict_codes(self) -> bool {
-        self.allow_packed_dict_codes && self.wire_version != WireVersion::V01
-    }
-
-    /// Allow dictionary code streams to store every code in the same
-    /// `ceil(log2(dict_len))` bits instead of a varint each.
-    #[cfg(feature = "unstable-v2")]
-    #[must_use]
-    pub fn with_packed_dict_codes(mut self, enabled: bool) -> Self {
-        self.allow_packed_dict_codes = enabled;
-        self
-    }
-
-    /// Whether vertex streams may be rANS-coded.
-    #[cfg(feature = "unstable-v2")]
-    #[must_use]
-    pub fn allow_rans_vertices(self) -> bool {
-        self.allow_rans_vertices && self.wire_version != WireVersion::V01
-    }
-
-    /// Allow plain vertex streams to be rANS-coded over the layer's vertex runs.
-    #[cfg(feature = "unstable-v2")]
-    #[must_use]
-    pub fn with_rans_vertices(mut self, enabled: bool) -> Self {
-        self.allow_rans_vertices = enabled;
-        self
-    }
-
     /// Whether vertex streams may be predicted from the layer's topology, which only v2 can express.
     #[cfg(feature = "unstable-v2")]
     #[must_use]
@@ -973,22 +801,6 @@ impl EncoderConfig {
     #[must_use]
     pub fn with_predicted_vertices(mut self, enabled: bool) -> Self {
         self.allow_predicted_vertices = enabled;
-        self
-    }
-
-    /// Whether predicted vertices store each edge in the frame of the edge before it.
-    #[cfg(feature = "unstable-v2")]
-    #[must_use]
-    pub fn predicted_frames(self) -> bool {
-        self.predicted_frames
-    }
-
-    /// Store predicted edges in the frame of the edge before them (the default), which makes
-    /// tiles smaller and roughly doubles the decoder's time per predicted vertex.
-    #[cfg(feature = "unstable-v2")]
-    #[must_use]
-    pub fn with_predicted_frames(mut self, enabled: bool) -> Self {
-        self.predicted_frames = enabled;
         self
     }
 
@@ -1030,16 +842,6 @@ pub enum StrEncoding {
     FsstDict,
     FrontDict,
     FsstFrontDict,
-}
-
-/// How to encode a float column, pinned rather than costed against the alternatives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FloatEncoding {
-    None,
-    #[cfg(feature = "unstable-v2")]
-    Dict,
-    #[cfg(feature = "unstable-v2")]
-    Alp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1166,9 +968,6 @@ pub struct ExplicitEncoder {
     /// Return the string encoding strategy for a string property column.
     #[dbg(skip)]
     pub get_str_encoding: Box<dyn Fn(&str) -> StrEncoding>,
-    /// Return the logical encoding for a float property column.
-    #[dbg(skip)]
-    pub get_float_encoding: Box<dyn Fn(&str) -> FloatEncoding>,
 }
 
 #[cfg(all(test, feature = "unstable-v2"))]

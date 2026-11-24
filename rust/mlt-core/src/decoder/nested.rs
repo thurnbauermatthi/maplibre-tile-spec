@@ -666,16 +666,7 @@ pub(crate) fn presence_popcount(stream: &RawStream<'_>) -> MltResult<u32> {
             "a nested presence stream, which is a bool stream",
         ));
     };
-    #[expect(
-        clippy::unnecessary_lazy_evaluations,
-        reason = "an eager error is dropped on every success"
-    )]
-    let coding = PresenceCoding::of_logical(logical).ok_or_else(|| {
-        MltError::UnsupportedLogicalEncoding(
-            encoding.logical,
-            "a nested presence stream, which is a bool stream",
-        )
-    })?;
+    let coding = PresenceCoding::of_logical(logical);
     presence_coding::popcount(stream.data, stream.meta.num_values, coding)
 }
 

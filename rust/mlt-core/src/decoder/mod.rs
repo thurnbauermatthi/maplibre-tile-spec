@@ -70,7 +70,7 @@ pub(crate) use crate::decoder::property::{
     RawStringsEncoding,
 };
 #[cfg(feature = "unstable-v2")]
-pub(crate) use crate::decoder::stream::model::{Alp, AlpScale, XyzLogical};
+pub(crate) use crate::decoder::stream::model::XyzLogical;
 pub(crate) use crate::decoder::stream::model::{
     BoolLogical, DictionaryType, FastPForKind, FloatLogical, IntEncoding, IntLogical, LengthType,
     LogicalCombination, LogicalEncoding, LogicalTechnique, LogicalValue, Morton, OffsetType,

@@ -85,17 +85,6 @@ fn dump_fields(bytes: &[u8], label: &str) -> Vec<String> {
         .collect()
 }
 
-/// The physical encoding the dump reports for every stream of `bytes`, in wire order.
-#[cfg(feature = "unstable-v2")]
-fn stream_physicals(bytes: &[u8]) -> Vec<mlt_core::wire::PhysicalEncoding> {
-    annotate(bytes)
-        .regions
-        .iter()
-        .filter_map(|r| r.blob.as_ref())
-        .map(|blob| blob.meta.encoding.physical)
-        .collect()
-}
-
 fn assert_dump_covers(bytes: &[u8]) {
     let tree = annotate(bytes);
     let mut leaves: Vec<(usize, usize)> = tree
@@ -511,7 +500,7 @@ fn native_preset_with_sort_trials() {
 }
 
 #[test]
-fn a_bitpacking_friendly_column_takes_fastpfor128() {
+fn a_bitpacking_friendly_column_takes_fastpfor() {
     let n = 2000_u32;
     let geoms: Vec<_> = (0..n).map(|i| pt(i32::try_from(i).unwrap(), 0)).collect();
     let values: Vec<PropValue> = (0..n)
@@ -521,8 +510,8 @@ fn a_bitpacking_friendly_column_takes_fastpfor128() {
 
     let v2 = l.encode(cfg_v2()).expect("v2 encode");
     assert!(
-        dump_text(&v2).contains("physical = FastPFor128"),
-        "v2 should code the scattered column with FastPFor128"
+        dump_text(&v2).contains("physical = FastPFor"),
+        "v2 should code the scattered column with FastPFor"
     );
     assert_differential(&l);
 
@@ -531,15 +520,15 @@ fn a_bitpacking_friendly_column_takes_fastpfor128() {
         .expect("v2 encode without fastpfor");
     assert!(
         v2.len() < without.len(),
-        "FastPFor128 ({} B) should beat the varint fallback ({} B)",
+        "FastPFor ({} B) should beat the varint fallback ({} B)",
         v2.len(),
         without.len()
     );
 }
 
 #[rstest]
-fn a_fastpfor128_stream_round_trips_across_block_boundaries(
-    #[values(127, 128, 129, 255, 256, 257, 383, 384, 385, 511, 512, 513)] n: u32,
+fn a_fastpfor_stream_round_trips_across_block_boundaries(
+    #[values(256, 257, 511, 512, 513, 767, 768, 769)] n: u32,
 ) {
     let geoms: Vec<_> = (0..n).map(|i| pt(i32::try_from(i).unwrap(), 0)).collect();
     let values: Vec<PropValue> = (0..n)
@@ -548,8 +537,8 @@ fn a_fastpfor128_stream_round_trips_across_block_boundaries(
     let l = layer(geoms, None, &[("scattered", values)]);
     let v2 = l.encode(cfg_v2()).expect("v2 encode");
     assert!(
-        dump_text(&v2).contains("physical = FastPFor128"),
-        "{n} scattered values should be coded with FastPFor128"
+        dump_text(&v2).contains("physical = FastPFor"),
+        "{n} scattered values should be coded with FastPFor"
     );
     assert_differential(&l);
 }
@@ -597,71 +586,20 @@ fn v2_is_smaller_for_typical_layer() {
 }
 
 #[test]
-fn columns_with_the_same_nulls_share_one_presence_bitfield() {
+fn every_optional_column_carries_its_own_presence_bitfield() {
     const SAME: &str = "100100100100100100";
-    const ODD_ONE_OUT: &str = "100010001000100010";
-    let props = [
-        ("a", opt_col(SAME)),
-        ("b", opt_col(SAME)),
-        ("c", opt_col(SAME)),
-        ("d", opt_col(ODD_ONE_OUT)),
-    ];
-    let l = layer(points(SAME), None, &props);
-    assert_differential(&l);
-
-    let dump = dump_text(&l.encode(cfg_v2()).unwrap());
-    assert!(dump.contains("shared presence bitfields = 1"), "{dump}");
-    assert_eq!(dump.matches("presence = Shared(0)").count(), 3, "{dump}");
-    // A mask only one column has stays with that column.
-    assert_eq!(dump.matches("presence = Inline").count(), 1, "{dump}");
-    // One bitfield for the three columns that agree, one for the odd one out.
-    assert_eq!(dump.matches("[Present ").count(), 2, "{dump}");
-}
-
-#[test]
-fn shared_presence_count_is_capped_by_the_layout_byte() {
-    // Sixteen features give more than seven distinct masks to go around.
-    let masks: Vec<String> = (0..15)
-        .map(|i| {
-            let mut mask = vec![b'0'; 16];
-            mask[0] = b'1';
-            mask[i + 1] = b'1';
-            String::from_utf8(mask).unwrap()
-        })
-        .collect();
-    let names: Vec<String> = (0..masks.len() * 2).map(|i| format!("c{i}")).collect();
-    let props: Vec<(&str, Vec<PropValue>)> = masks
-        .iter()
-        .flat_map(|mask| [opt_col(mask), opt_col(mask)])
-        .zip(&names)
-        .map(|(values, name)| (name.as_str(), values))
-        .collect();
-    let l = layer(points(&masks[0]), None, &props);
-    assert_differential(&l);
-
-    let dump = dump_text(&l.encode(cfg_v2()).unwrap());
-    assert!(dump.contains("shared presence bitfields = 7"), "{dump}");
-    assert_eq!(dump.matches("presence = Shared(6)").count(), 2, "{dump}");
-    // Eight of the fifteen groups lose the tie-break, and both their columns go inline.
-    assert_eq!(dump.matches("presence = Inline").count(), 16, "{dump}");
-    assert_eq!(dump.matches("[Present ").count(), 23, "{dump}");
-}
-
-#[test]
-fn an_optional_id_shares_its_presence_bitfield_with_a_column() {
-    const MASK: &str = "10110010";
-    let ids = MASK
+    let ids = SAME
         .bytes()
         .enumerate()
         .map(|(i, b)| (b == b'1').then(|| i as u64 + 1))
         .collect();
-    let l = layer(points(MASK), Some(ids), &[("val", opt_col(MASK))]);
+    let props = [("a", opt_col(SAME)), ("b", opt_col(SAME))];
+    let l = layer(points(SAME), Some(ids), &props);
     assert_differential(&l);
 
     let dump = dump_text(&l.encode(cfg_v2()).unwrap());
-    assert!(dump.contains("shared presence bitfields = 1"), "{dump}");
-    assert_eq!(dump.matches("presence = Shared(0)").count(), 2, "{dump}");
-    assert_eq!(dump.matches("[Present ").count(), 1, "{dump}");
+    assert_eq!(dump.matches("presence = Inline").count(), 3, "{dump}");
+    assert_eq!(dump.matches("[Present ").count(), 3, "{dump}");
 }
 
 mod geometry_layouts {
@@ -792,8 +730,7 @@ mod geometry_layouts {
         no m-value section
         a types stream leads the geometry section
         extent 2^(n+6) = 4096
-        shared bitfields are bitmaps
-        shared presence bitfields = 0
+        reserved
         geometry layout = Lines
         ");
         assert_snapshot!(geometry_streams(&bytes).join("\n"), @"
@@ -851,8 +788,7 @@ mod geometry_layouts {
         no m-value section
         a types stream leads the geometry section
         extent 2^(n+6) = 4096
-        shared bitfields are bitmaps
-        shared presence bitfields = 0
+        reserved
         geometry layout = TessPolygons
         ");
         assert_snapshot!(geometry_streams(&bytes).join("\n"), @"
@@ -1142,22 +1078,6 @@ mod strings {
         assert_differential(&l);
     }
 
-    #[test]
-    fn a_string_column_shares_its_presence_bitfield_with_a_scalar_one() {
-        const MASK: &str = "10110010";
-        let strings: Vec<PropValue> = MASK
-            .bytes()
-            .enumerate()
-            .map(|(i, b)| PropValue::Str((b == b'1').then(|| format!("v{i}").into())))
-            .collect();
-        let l = layer(points(MASK), None, &[("s", strings), ("n", opt_col(MASK))]);
-        assert_differential(&l);
-
-        let dump = dump_text(&l.encode(cfg_v2()).unwrap());
-        assert!(dump.contains("shared presence bitfields = 1"), "{dump}");
-        assert_eq!(dump.matches("presence = Shared(0)").count(), 2, "{dump}");
-    }
-
     /// A layer whose two string columns hold the same values, which both versions group.
     fn shared_dict_layer() -> TileLayer {
         let shared: Vec<PropValue> = dict_values(6)
@@ -1268,198 +1188,36 @@ mod strings {
         assert_differential(&l);
     }
 
-    mod shared_dict_presence {
-        use super::*;
-
-        /// A shared-dictionary child per mask, holding a [`dict_values`] entry at each `'1'`.
-        ///
-        /// Every mask must cover an even and an odd index, so all children hold the same two
-        /// distinct values and the encoder groups them into one dictionary.
-        fn dict_children(masks: &[&str]) -> Vec<(String, Vec<PropValue>)> {
-            let values = dict_values(masks[0].len());
-            masks
-                .iter()
-                .enumerate()
-                .map(|(child, mask)| {
-                    let column = mask
-                        .bytes()
-                        .zip(&values)
-                        .map(|(b, v)| PropValue::Str((b == b'1').then(|| v.as_str().into())))
-                        .collect();
-                    (format!("name:{child}"), column)
-                })
+    #[test]
+    fn every_shared_dictionary_child_carries_its_own_presence() {
+        let values = dict_values(6);
+        let child = |mask: &str| -> Vec<PropValue> {
+            mask.bytes()
+                .zip(&values)
+                .map(|(b, v)| PropValue::Str((b == b'1').then(|| v.as_str().into())))
                 .collect()
-        }
-
-        /// A layer of one shared-dictionary column over `dict_masks`, then a `u32` column per
-        /// mask in `scalar_masks`.
-        fn dict_layer(dict_masks: &[&str], scalar_masks: &[&str]) -> TileLayer {
-            let mut props = dict_children(dict_masks);
-            for (i, mask) in scalar_masks.iter().enumerate() {
-                props.push((format!("n{i}"), opt_col(mask)));
-            }
-            let borrowed: Vec<(&str, Vec<PropValue>)> = props
-                .iter()
-                .map(|(name, values)| (name.as_str(), values.clone()))
-                .collect();
-            layer(points(dict_masks[0]), None, &borrowed)
-        }
-
-        /// A `u32` column over `before`, a shared-dictionary column over `dict_masks`, then a
-        /// `u32` column over `after`.
-        fn wrapped_dict_layer(before: &str, dict_masks: &[&str], after: &str) -> TileLayer {
-            let mut props = vec![("n0".to_owned(), opt_col(before))];
-            props.extend(dict_children(dict_masks));
-            props.push(("n1".to_owned(), opt_col(after)));
-            let borrowed: Vec<(&str, Vec<PropValue>)> = props
-                .iter()
-                .map(|(name, values)| (name.as_str(), values.clone()))
-                .collect();
-            layer(points(before), None, &borrowed)
-        }
-
-        /// How often `needle` annotates the v2 dump of `l`.
-        fn count(l: &TileLayer, needle: &str) -> usize {
-            dump_text(&l.encode(cfg_v2()).unwrap())
-                .matches(needle)
-                .count()
-        }
-
-        #[test]
-        fn dict_children_with_the_same_nulls_share_one_presence_bitfield() {
-            let l = dict_layer(&["101101", "101101", "101101"], &[]);
-            assert_differential(&l);
-
-            assert_eq!(count(&l, "shared presence bitfields = 1"), 1);
-            assert_eq!(count(&l, "presence = Shared(0)"), 3);
-            assert_eq!(count(&l, "[Present "), 1);
-        }
-
-        #[test]
-        fn a_mask_only_one_dict_child_has_stays_inline() {
-            let l = dict_layer(&["101101", "101101", "110011"], &[]);
-            assert_differential(&l);
-
-            assert_eq!(count(&l, "shared presence bitfields = 1"), 1);
-            assert_eq!(count(&l, "presence = Shared(0)"), 2);
-            assert_eq!(count(&l, "presence = Inline"), 1);
-            assert_eq!(count(&l, "[Present "), 2);
-        }
-
-        #[test]
-        fn a_dict_child_without_nulls_stays_all_present() {
-            let l = dict_layer(&["111111", "101101", "101101"], &[]);
-            assert_differential(&l);
-
-            assert_eq!(count(&l, "shared presence bitfields = 1"), 1);
-            assert_eq!(count(&l, "presence = AllPresent"), 1);
-            assert_eq!(count(&l, "presence = Shared(0)"), 2);
-            assert_eq!(count(&l, "[Present "), 1);
-        }
-
-        #[test]
-        fn a_mask_a_dict_child_and_a_scalar_column_share_costs_one_slot() {
-            // Neither mask is shared within the dictionary, so both slots are earned
-            // only by counting the dict children alongside the scalar columns.
-            let l = dict_layer(&["101101", "110011"], &["101101", "110011"]);
-            assert_differential(&l);
-
-            assert_eq!(count(&l, "shared presence bitfields = 2"), 1);
-            assert_eq!(count(&l, "presence = Shared(0)"), 2);
-            assert_eq!(count(&l, "presence = Shared(1)"), 2);
-            assert_eq!(count(&l, "[Present "), 2);
-        }
-
-        #[test]
-        fn a_dict_child_shares_with_the_columns_before_and_after_the_dict() {
-            let l = wrapped_dict_layer("101101", &["110011", "101101"], "110011");
-            assert_differential(&l);
-
-            assert_eq!(count(&l, "shared presence bitfields = 2"), 1);
-            assert_eq!(count(&l, "presence = Shared(0)"), 2);
-            assert_eq!(count(&l, "presence = Shared(1)"), 2);
-            assert_eq!(count(&l, "[Present "), 2);
-        }
-
-        #[test]
-        fn dict_children_compete_for_the_slots_the_layout_byte_allows() {
-            // Fifteen masks, each held by two children: eight groups lose the tie-break.
-            let masks: Vec<String> = (0..15)
-                .map(|i| {
-                    let mut mask = vec![b'0'; 16];
-                    mask[0] = b'1';
-                    mask[1] = b'1';
-                    if i > 0 {
-                        mask[i + 1] = b'1';
-                    }
-                    String::from_utf8(mask).unwrap()
-                })
-                .collect();
-            let paired: Vec<&str> = masks
-                .iter()
-                .flat_map(|mask| [mask.as_str(), mask.as_str()])
-                .collect();
-            let l = dict_layer(&paired, &[]);
-            assert_differential(&l);
-
-            assert_eq!(count(&l, "shared presence bitfields = 7"), 1);
-            assert_eq!(count(&l, "presence = Inline"), 16);
-            assert_eq!(count(&l, "[Present "), 23);
-        }
-
-        #[test]
-        fn which_masks_win_a_slot_does_not_depend_on_hash_map_order() {
-            let l = dict_layer(&["101101", "101101", "110011", "110011", "111101"], &[]);
-            let first = l.encode(cfg_v2()).unwrap();
-            let second = l.encode(cfg_v2()).unwrap();
-            assert_eq!(first, second);
-        }
+        };
+        let l = layer(
+            points("111111"),
+            None,
+            &[("name:0", child("101101")), ("name:1", child("101101"))],
+        );
+        assert_differential(&l);
+        let dump = dump_text(&l.encode(cfg_v2()).unwrap());
+        assert_eq!(dump.matches("presence = Inline").count(), 2, "{dump}");
     }
 }
 
-mod float_codecs {
-    use mlt_core::wire::{FloatLogical, LogicalEncoding, PhysicalEncoding};
-
+mod floats {
     use super::*;
 
-    pub fn cfg_dict() -> EncoderConfig {
-        cfg_v2().with_float_dict(true)
-    }
-
-    pub fn cfg_alp() -> EncoderConfig {
-        cfg_v2().with_float_alp(true)
-    }
-
-    pub fn cfg_both() -> EncoderConfig {
-        cfg_dict().with_float_alp(true)
-    }
-
-    pub fn f64_col(values: &[f64]) -> Vec<PropValue> {
+    fn f64_col(values: &[f64]) -> Vec<PropValue> {
         values.iter().map(|&v| PropValue::F64(Some(v))).collect()
     }
 
-    pub fn f32_col(values: &[f32]) -> Vec<PropValue> {
-        values.iter().map(|&v| PropValue::F32(Some(v))).collect()
-    }
-
-    pub fn f32_column(values: &[f32]) -> TileLayer {
-        layer(
-            points(&"1".repeat(values.len())),
-            None,
-            &[("v", f32_col(values))],
-        )
-    }
-
-    /// A few decimals repeated, which is what a float dictionary is for.
-    pub fn repeated_decimals(n: usize) -> Vec<f64> {
-        const PATTERN: [f64; 6] = [1.5, 2.5, 1.5, 1.5, 2.5, 3.5];
-        (0..n).map(|i| PATTERN[i % PATTERN.len()]).collect()
-    }
-
-    /// Values no power of ten scales to an integer, so Framed, Exception-Free ALP cannot take them.
-    pub fn irrational(n: usize) -> Vec<f64> {
-        use std::f64::consts::{E, PI, SQRT_2};
-        (0..n).map(|i| [PI, E, SQRT_2][i % 3]).collect()
+    fn column(values: &[f64]) -> TileLayer {
+        let mask = "1".repeat(values.len());
+        layer(points(&mask), None, &[("v", f64_col(values))])
     }
 
     /// The column's values as bit patterns, so NaN and `-0.0` compare usefully.
@@ -1467,7 +1225,7 @@ mod float_codecs {
         clippy::wildcard_enum_match_arm,
         reason = "only float values are expected"
     )]
-    pub fn value_bits(tile: &TileLayer) -> Vec<u64> {
+    fn value_bits(tile: &TileLayer) -> Vec<u64> {
         tile.features()
             .iter()
             .map(|f| match f.properties()[0] {
@@ -1478,671 +1236,79 @@ mod float_codecs {
             .collect()
     }
 
-    /// The physical encoding each float stream in the tile carries, in wire order.
-    pub fn float_physicals(bytes: &[u8]) -> Vec<PhysicalEncoding> {
-        annotate(bytes)
-            .regions
-            .iter()
-            .filter_map(|r| r.blob)
-            .filter_map(|b| match b.meta.encoding.logical {
-                LogicalEncoding::Float(_) => Some(b.meta.encoding.physical),
-                LogicalEncoding::Int(_) | LogicalEncoding::Bool(_) | LogicalEncoding::Vertex(_) => {
-                    None
-                }
-            })
-            .collect()
-    }
-
-    /// The encoding each float stream in the tile carries, in wire order.
-    pub fn float_encodings(bytes: &[u8]) -> Vec<FloatLogical> {
-        annotate(bytes)
-            .regions
-            .iter()
-            .filter_map(|r| r.blob)
-            .filter_map(|b| match b.meta.encoding.logical {
-                LogicalEncoding::Float(logical) => Some(logical),
-                LogicalEncoding::Int(_) | LogicalEncoding::Bool(_) | LogicalEncoding::Vertex(_) => {
-                    None
-                }
-            })
-            .collect()
-    }
-
-    pub fn round_trip(l: &TileLayer, config: EncoderConfig) -> TileLayer {
-        let bytes = l.encode(config).expect("encode");
-        let (tag, tile) = decode(&bytes);
-        assert_eq!(tag, 2);
-        assert_dump_covers(&bytes);
-        tile
-    }
-
-    pub fn column(values: &[f64]) -> TileLayer {
-        let mask = "1".repeat(values.len());
-        layer(points(&mask), None, &[("v", f64_col(values))])
-    }
-
     #[test]
-    fn a_repetitive_column_round_trips_through_a_dictionary() {
-        let l = column(&repeated_decimals(12));
-        assert_eq!(round_trip(&l, cfg_dict()), round_trip(&l, cfg_v2()));
-    }
-
-    #[test]
-    fn a_dictionary_column_is_smaller_than_the_raw_one() {
-        let l = column(&repeated_decimals(12));
-        let plain = l.encode(cfg_v2()).unwrap();
-        let dict = l.encode(cfg_dict()).unwrap();
-        assert!(
-            dict.len() < plain.len(),
-            "{} vs {}",
-            dict.len(),
-            plain.len()
-        );
-        assert_eq!(
-            value_bits(&round_trip(&l, cfg_dict())),
-            value_bits(&round_trip(&l, cfg_v2()))
-        );
-    }
-
-    #[test]
-    fn a_decimal_column_takes_the_dictionary_when_alp_is_off() {
-        let bytes = column(&repeated_decimals(12)).encode(cfg_dict()).unwrap();
-        assert_eq!(
-            float_encodings(&bytes),
-            [FloatLogical::Dict, FloatLogical::None]
-        );
-    }
-
-    #[test]
-    fn a_column_alp_cannot_carry_still_takes_the_dictionary() {
-        let bytes = column(&irrational(12)).encode(cfg_both()).unwrap();
-        assert_eq!(
-            float_encodings(&bytes),
-            [FloatLogical::Dict, FloatLogical::None]
-        );
-    }
-
-    #[test]
-    fn both_flags_off_keeps_a_repetitive_column_raw() {
-        let bytes = column(&repeated_decimals(12)).encode(cfg_v2()).unwrap();
-        assert_eq!(float_encodings(&bytes), [FloatLogical::None]);
-    }
-
-    #[test]
-    #[expect(
-        clippy::wildcard_enum_match_arm,
-        reason = "only f64 values are expected"
-    )]
-    fn zero_and_negative_zero_stay_distinct_entries() {
-        const VALUES: &[f64] = &[0.0, -0.0, 0.0, -0.0, 0.0, -0.0];
-        let l = column(VALUES);
-        let tile = round_trip(&l, cfg_dict());
-        let signs: Vec<bool> = tile
-            .features()
-            .iter()
-            .map(|f| match f.properties()[0] {
-                PropValue::F64(Some(v)) => v.is_sign_negative(),
-                ref other => panic!("unexpected {other:?}"),
-            })
-            .collect();
-        assert_eq!(signs, [false, true, false, true, false, true]);
-    }
-
-    #[test]
-    #[expect(
-        clippy::wildcard_enum_match_arm,
-        reason = "only f64 values are expected"
-    )]
-    fn every_nan_with_the_same_bits_shares_one_entry() {
-        let values: Vec<f64> = (0..8)
-            .map(|i| if i % 2 == 0 { f64::NAN } else { 7.5 })
-            .collect();
+    fn floats_keep_every_bit() {
+        let values = [0.0, -0.0, f64::NAN, f64::INFINITY, 1.5, -2.25e300];
         let l = column(&values);
-        let tile = round_trip(&l, cfg_dict());
-        let nans: Vec<bool> = tile
-            .features()
-            .iter()
-            .map(|f| match f.properties()[0] {
-                PropValue::F64(Some(v)) => v.is_nan(),
-                ref other => panic!("unexpected {other:?}"),
-            })
+        let expected: Vec<u64> = values.iter().map(|v| v.to_bits()).collect();
+        for cfg in [cfg_v1(), cfg_v2()] {
+            let (_, tile) = decode(&l.encode(cfg).unwrap());
+            assert_eq!(value_bits(&tile), expected);
+        }
+    }
+
+    #[test]
+    fn f32_columns_round_trip() {
+        let values: Vec<PropValue> = (0..12)
+            .map(|i| PropValue::F32(Some([1.5_f32, 2.5, 3.5][i % 3])))
             .collect();
-        assert_eq!(nans, [true, false, true, false, true, false, true, false]);
+        let l = layer(points(&"1".repeat(12)), None, &[("v", values)]);
+        assert_differential(&l);
     }
 
     #[test]
-    fn an_all_distinct_column_no_encoding_fits_stays_raw() {
-        let values: Vec<f64> = (0..16)
-            .map(|i| std::f64::consts::PI * f64::from(i + 1))
-            .collect();
-        let l = column(&values);
-        assert_eq!(l.encode(cfg_both()).unwrap(), l.encode(cfg_v2()).unwrap());
-    }
-
-    #[test]
-    fn f32_columns_round_trip_through_a_dictionary() {
-        let values: Vec<f32> = (0..12).map(|i| [1.5_f32, 2.5, 3.5][i % 3]).collect();
-        let l = f32_column(&values);
-        assert_eq!(round_trip(&l, cfg_dict()), round_trip(&l, cfg_v2()));
-    }
-
-    #[test]
-    fn an_optional_dictionary_column_round_trips() {
+    fn an_optional_float_column_round_trips() {
         let values: Vec<PropValue> = (0..12)
             .map(|i| PropValue::F64((i % 3 != 0).then(|| f64::from(i % 2) + 0.5)))
             .collect();
         let l = layer(points(&"1".repeat(12)), None, &[("v", values)]);
-        assert_eq!(round_trip(&l, cfg_dict()), round_trip(&l, cfg_v2()));
-    }
-
-    #[rstest]
-    #[case::dict(cfg_v1().with_float_dict(true))]
-    #[case::alp(cfg_v1().with_float_alp(true))]
-    #[case::both(cfg_v1().with_float_dict(true).with_float_alp(true))]
-    fn v1_ignores_the_flags(#[case] config: EncoderConfig) {
-        const VALUES: &[f64] = &[1.5, 1.5, 1.5, 1.5];
-        let l = column(VALUES);
-        assert_eq!(l.encode(config).unwrap(), l.encode(cfg_v1()).unwrap());
+        assert_differential(&l);
     }
 }
 
-mod alp {
-    use mlt_core::wire::{FastPForKind, FloatLogical, PhysicalEncoding};
-
-    use super::float_codecs::*;
+mod presence {
     use super::*;
 
-    #[test]
-    fn a_decimal_column_is_smaller_through_alp() {
-        let values: Vec<f64> = (0..64).map(|i| f64::from(i) * 0.25 - 8.0).collect();
-        let l = column(&values);
-        let plain = l.encode(cfg_v2()).unwrap();
-        let coded = l.encode(cfg_alp()).unwrap();
-
-        assert_eq!(round_trip(&l, cfg_alp()), round_trip(&l, cfg_v2()));
-        assert!(
-            coded.len() < plain.len(),
-            "{} vs {}",
-            coded.len(),
-            plain.len()
-        );
-    }
-
-    #[rstest]
-    #[case::short_near_zero((0..8).map(|i| f64::from(i) * 0.25).collect())]
-    #[case::long_near_zero((0..1024).map(|i| f64::from(i % 97) * 0.25).collect())]
-    #[case::long_far_from_zero((0..1024).map(|i| 52_500_000.0 + f64::from(i % 97) * 0.25).collect())]
-    #[case::negative_only((0..600).map(|i| -1000.0 - f64::from(i % 53) * 0.5).collect())]
-    #[case::straddling_zero((0..600).map(|i| f64::from(i % 53) * 0.5 - 13.0).collect())]
-    #[case::single_value(vec![1.25])]
-    #[case::all_equal(vec![4.0; 600])]
-    #[case::wide_spread((0..600).map(|i| if i % 2 == 0 { -1e12 } else { 1e12 }).collect())]
-    // The widest offsets an exception-free column can hold: the two ends of the `i64` code range,
-    // whose distance only just fits `u64`.
-    #[case::offsets_nearly_fill_u64(vec![-9.223_372_036_854_775e18, 9.223_372_036_854_775e18])]
-    fn any_alp_column_shape_round_trips_bit_for_bit(#[case] values: Vec<f64>) {
-        let l = column(&values);
-        assert_eq!(
-            value_bits(&round_trip(&l, cfg_alp())),
-            value_bits(&round_trip(&l, cfg_v2()))
-        );
-    }
-
-    /// A long column of narrow offsets is what bitpacking is for.
-    #[test]
-    fn a_long_alp_column_takes_fastpfor_over_varint() {
-        let values: Vec<f64> = (0..1024)
-            .map(|i| 1000.0 + f64::from(i % 97) * 0.25)
-            .collect();
-        let l = column(&values);
-        let packed = l.encode(cfg_alp()).unwrap();
-        let varint = l.encode(cfg_alp().with_fastpfor(false)).unwrap();
-
-        assert_eq!(
-            float_physicals(&packed)[..],
-            [PhysicalEncoding::FastPFor(FastPForKind::Block128Le)]
-        );
-        assert!(
-            packed.len() < varint.len(),
-            "{} vs {}",
-            packed.len(),
-            varint.len()
-        );
-        assert_eq!(
-            value_bits(&round_trip(&l, cfg_alp())),
-            value_bits(&round_trip(&l, cfg_v2()))
-        );
-    }
-
-    /// Block framing does not amortise over a handful of values, so varint must keep it.
-    #[test]
-    fn a_short_alp_column_keeps_varint() {
-        let values: Vec<f64> = (0..8).map(|i| f64::from(i) * 0.25).collect();
-        let bytes = column(&values).encode(cfg_alp()).unwrap();
-        assert_eq!(float_physicals(&bytes)[..], [PhysicalEncoding::VarInt]);
-    }
-
-    /// `FastPFOR` codes `u32` words, so a column whose offsets overflow one is not a candidate.
-    /// The spread stays under `2^53` so that Framed, Exception-Free ALP still carries the column.
-    #[test]
-    fn a_column_whose_offsets_overflow_u32_keeps_varint() {
-        // Scaled by `10^1`, the odd values sit `1e10` from the base, past `u32::MAX` (~4.3e9)
-        // and well inside Framed, Exception-Free ALP's `2^53 - 1` code bound.
-        let values: Vec<f64> = (0..1024)
-            .map(|i| if i % 2 == 0 { 0.5 } else { 1e9 + 0.5 })
-            .collect();
-        let bytes = column(&values).encode(cfg_alp()).unwrap();
-        assert_eq!(float_physicals(&bytes)[..], [PhysicalEncoding::VarInt]);
-        assert_eq!(
-            value_bits(&round_trip(&column(&values), cfg_alp())),
-            value_bits(&round_trip(&column(&values), cfg_v2()))
-        );
-    }
-
-    /// A frame-of-reference base means only the spread costs bytes, not the magnitude.
-    #[test]
-    fn shifting_a_narrow_column_far_from_zero_costs_only_the_base() {
-        let near_zero: Vec<f64> = (0..256).map(|i| f64::from(i) * 0.25).collect();
-        let shifted: Vec<f64> = near_zero.iter().map(|v| v + 52_500_000.0).collect();
-        let here = column(&near_zero).encode(cfg_alp()).unwrap().len();
-        let far = column(&shifted).encode(cfg_alp()).unwrap().len();
-        assert!(far <= here + 8, "{far} vs {here}");
-    }
-
-    #[test]
-    fn a_decimal_column_takes_alp_when_the_dictionary_is_off() {
-        let values: Vec<f64> = (0..12).map(|i| f64::from(i) * 0.25).collect();
-        let bytes = column(&values).encode(cfg_alp()).unwrap();
-        assert!(matches!(
-            float_encodings(&bytes)[..],
-            [FloatLogical::Alp(_)]
-        ));
-    }
-
-    #[test]
-    fn alp_beats_the_dictionary_on_a_repetitive_decimal_column() {
-        let bytes = column(&repeated_decimals(12)).encode(cfg_both()).unwrap();
-        assert!(matches!(
-            float_encodings(&bytes)[..],
-            [FloatLogical::Alp(_)]
-        ));
-    }
-
-    #[test]
-    #[expect(
-        clippy::wildcard_enum_match_arm,
-        reason = "only f64 values are expected"
-    )]
-    fn coordinates_round_trip_bit_for_bit() {
-        const VALUES: &[f64] = &[13.404_954, 52.520_008, -74.006, 40.712_776, 0.0, 180.0];
-        let l = column(VALUES);
-        let tile = round_trip(&l, cfg_alp());
-        let bits: Vec<u64> = tile
-            .features()
-            .iter()
-            .map(|f| match f.properties()[0] {
-                PropValue::F64(Some(v)) => v.to_bits(),
-                ref other => panic!("unexpected {other:?}"),
-            })
-            .collect();
-        let expected: Vec<u64> = VALUES.iter().map(|v| v.to_bits()).collect();
-        assert_eq!(bits, expected);
-    }
-
-    #[rstest]
-    #[case::nan(f64::NAN)]
-    #[case::infinity(f64::INFINITY)]
-    #[case::negative_zero(-0.0)]
-    fn one_value_alp_cannot_carry_keeps_the_whole_column_off_alp(#[case] odd: f64) {
-        let mut values: Vec<f64> = (0..16).map(|i| f64::from(i) * 0.5).collect();
-        values.push(odd);
-        let l = column(&values);
-        assert_eq!(
-            value_bits(&round_trip(&l, cfg_alp())),
-            value_bits(&round_trip(&l, cfg_v2()))
-        );
-    }
-
-    #[test]
-    fn an_optional_alp_column_round_trips() {
-        let values: Vec<PropValue> = (0..24)
-            .map(|i| PropValue::F64((i % 4 != 0).then(|| f64::from(i) * 0.125)))
-            .collect();
-        let l = layer(points(&"1".repeat(24)), None, &[("v", values)]);
-        assert_eq!(round_trip(&l, cfg_alp()), round_trip(&l, cfg_v2()));
-    }
-
-    #[test]
-    fn f32_columns_round_trip_through_alp() {
-        let values: Vec<f32> = (0_i16..32).map(|i| f32::from(i) * 0.5 - 8.0).collect();
-        let l = f32_column(&values);
-        assert_eq!(round_trip(&l, cfg_alp()), round_trip(&l, cfg_v2()));
-    }
-}
-
-/// The v2-only bit-packed physical encoding, behind a default-off [`EncoderConfig`] flag.
-mod bit_packing {
-    use mlt_core::wire::{FastPForKind, PhysicalEncoding};
-
-    use super::*;
-
-    /// A string column over more distinct values than a one-byte varint code can
-    /// number, in an order no delta or run can shorten.
-    fn wide_dict_layer() -> TileLayer {
-        let values: Vec<PropValue> = (0..600_u32)
-            .map(|i| {
-                let scrambled = i.wrapping_mul(2_654_435_761) >> 7;
-                PropValue::Str(Some(format!("value_{:04}", scrambled % 300).into()))
-            })
-            .collect();
-        let geoms = points(&"1".repeat(values.len()));
-        layer(geoms, None, &[("v", values)])
-    }
-
-    #[test]
-    fn packed_dictionary_codes_round_trip_and_shrink_the_column() {
-        let l = wide_dict_layer();
-        let plain = l
-            .clone()
-            .encode(cfg_v2().with_packed_dict_codes(false))
-            .unwrap();
-        let packed = l.encode(cfg_v2()).unwrap();
-        assert!(
-            packed.len() < plain.len(),
-            "{} vs {}",
-            packed.len(),
-            plain.len()
-        );
-        assert_eq!(
-            stream_physicals(&packed),
-            [
-                PhysicalEncoding::FastPFor(FastPForKind::Block128Le),
-                PhysicalEncoding::BitPacked,
-                PhysicalEncoding::VarInt,
-                PhysicalEncoding::None,
-            ]
-        );
-        assert_eq!(decode(&packed).1, decode(&plain).1);
-        assert_dump_covers(&packed);
-    }
-
-    #[test]
-    fn packing_changes_nothing_in_v1() {
-        let l = wide_dict_layer();
-        assert_eq!(
-            l.clone()
-                .encode(cfg_v1().with_packed_dict_codes(true))
-                .unwrap(),
-            l.encode(cfg_v1()).unwrap()
-        );
-    }
-}
-
-/// A presence field that is not a bitmap builds its bits instead of borrowing them, so a
-/// tile can name far more of them than the bytes it spent naming them. The bits are
-/// charged to the parse budget before they are allocated, which this holds to.
-#[test]
-fn a_run_coded_presence_is_charged_to_the_parse_budget() {
-    // One block of present features over enough of them that the mask costs runs, not a
-    // bitmap: three varints on the wire, 2000 bits once read.
-    let mask: String = (0..2000)
-        .map(|i| if (500..1500).contains(&i) { 'x' } else { '-' })
-        .collect();
-    let values: Vec<PropValue> = mask
-        .chars()
-        .map(|c| {
-            if c == 'x' {
-                PropValue::U32(Some(1))
-            } else {
-                PropValue::U32(None)
-            }
-        })
-        .collect();
-    let layer = layer(points(&mask), None, &[("v", values)]);
-    let tile = layer.encode(cfg_v2()).unwrap();
-
-    // The field is tiny on the wire, so a budget that small still reads the header.
-    assert!(
-        tile.len() < 4096,
-        "the mask should cost runs, not a bitmap: {}",
-        tile.len()
-    );
-
-    // A budget with room decodes it; one without fails rather than allocating the bits.
-    assert!(Parser::default().parse_layers(&tile).is_ok());
-    let err = Parser::with_max_size(64).parse_layers(&tile).unwrap_err();
-    assert!(
-        matches!(err, mlt_core::MltError::MemoryLimitExceeded { .. }),
-        "the bits should be refused by the budget, not by something else: {err}"
-    );
-}
-
-mod delta2 {
-    use mlt_core::test_helpers::stream_logicals;
-    use mlt_core::wire::{DictionaryType, IntLogical, LogicalEncoding, StreamType, VertexLogical};
-    use mlt_core::{MValue, PropKind};
-
-    use super::*;
-
-    fn cfg_delta2() -> EncoderConfig {
-        cfg_v2().with_delta2(true)
-    }
-
-    fn vertex_logicals(bytes: &[u8]) -> Vec<LogicalEncoding> {
-        stream_logicals(bytes, StreamType::Data(DictionaryType::Vertex))
-    }
-
-    fn data_logicals(bytes: &[u8]) -> Vec<LogicalEncoding> {
-        stream_logicals(bytes, StreamType::Data(DictionaryType::None))
-    }
-
-    /// A gently curving line sampled every ~70 units, as resampled lane geometry is.
-    fn arc(x: i32, y: i32, n: i32) -> Vec<(i32, i32)> {
-        (0..n).map(|i| (x + 70 * i, y + i * i / 40)).collect()
-    }
-
-    fn smooth_lines() -> Vec<Geometry<i32>> {
-        (0..6).map(|i| line(&arc(i * 900, i * 400, 400))).collect()
-    }
-
-    fn elevated_lines() -> TileLayer {
-        let mut builder = TileLayer::builder("test_layer", 131_072).unwrap();
-        let elev = builder.add_m_value("elev", PropKind::I32).unwrap();
-        for i in 0..6 {
-            let pts = arc(i * 900, i * 400, 400);
-            let heights = (0..400)
-                .map(|v| 372_000 + v * 9 + v * v / 50 - i * 300)
-                .collect();
-            let mut feature = builder.feature(line(&pts));
-            feature.m_value(elev, MValue::I32(Some(heights))).unwrap();
-            feature.finish().unwrap();
-        }
-        builder.finish()
-    }
-
-    #[test]
-    fn smooth_vertices_take_second_order_deltas_and_decode_unchanged() {
-        let l = layer(smooth_lines(), None, &[]);
-        let plain = l.encode(cfg_v2()).unwrap();
-        let delta2 = l.encode(cfg_delta2()).unwrap();
-        assert_eq!(
-            vertex_logicals(&plain),
-            [LogicalEncoding::Vertex(VertexLogical::ComponentwiseDelta)]
-        );
-        assert_eq!(
-            vertex_logicals(&delta2),
-            [LogicalEncoding::Vertex(VertexLogical::ComponentwiseDelta2)]
-        );
-        assert!(
-            delta2.len() < plain.len(),
-            "{} vs {}",
-            delta2.len(),
-            plain.len()
-        );
-        assert_eq!(decode(&delta2).1, decode(&plain).1);
-        assert_dump_covers(&delta2);
-    }
-
-    #[test]
-    fn a_smooth_m_value_column_takes_second_order_deltas_and_decodes_unchanged() {
-        let l = elevated_lines();
-        let plain = l.encode(cfg_v2()).unwrap();
-        let delta2 = l.encode(cfg_delta2()).unwrap();
-        assert_eq!(
-            data_logicals(&delta2),
-            [LogicalEncoding::Int(IntLogical::Delta2)]
-        );
-        assert!(
-            delta2.len() < plain.len(),
-            "{} vs {}",
-            delta2.len(),
-            plain.len()
-        );
-        assert_eq!(decode(&delta2).1, l);
-        assert_dump_covers(&delta2);
-    }
-
-    #[rstest]
-    #[case::i8(|i: i32| PropValue::I8(Some(i8::try_from(i % 100 - 50).unwrap())))]
-    #[case::u8(|i: i32| PropValue::U8(Some(u8::try_from(i % 200).unwrap())))]
-    #[case::i32(|i: i32| PropValue::I32(Some(i * i - 900)))]
-    #[case::u32(|i: i32| PropValue::U32(Some(i.unsigned_abs() * 1_000_003)))]
-    #[case::i64(|i: i32| PropValue::I64(Some(i64::from(i).pow(3) - 9_000_000_000)))]
-    #[case::u64(|i: i32| PropValue::U64(Some(u64::from(i.unsigned_abs()).pow(3) << 20)))]
-    fn an_integer_column_round_trips_through_delta2(#[case] value: fn(i32) -> PropValue) {
-        let values: Vec<PropValue> = (0..300).map(value).collect();
-        let l = layer((0..300).map(|i| pt(i, i)).collect(), None, &[("v", values)]);
-        let coded = l.encode(cfg_delta2()).unwrap();
-        assert_eq!(decode(&coded).1, l);
-        assert_dump_covers(&coded);
-    }
-
-    #[test]
-    fn v1_ignores_delta2() {
-        let values = (0..6).map(|i| PropValue::I32(Some(i * i))).collect();
-        let l = layer(smooth_lines(), None, &[("v", values)]);
-        let v1 = cfg_v1().with_delta2(true);
-        assert_eq!(l.encode(v1).unwrap(), l.encode(cfg_v1()).unwrap());
-    }
-}
-
-mod rans_vertices {
-    use mlt_core::test_helpers::stream_logicals;
-    use mlt_core::wire::{DictionaryType, LogicalEncoding, StreamType, VertexLogical};
-
-    use super::*;
-
-    fn cfg_rans() -> EncoderConfig {
-        cfg_v2().with_rans_vertices(true)
-    }
-
-    fn vertex_logicals(bytes: &[u8]) -> Vec<LogicalEncoding> {
-        stream_logicals(bytes, StreamType::Data(DictionaryType::Vertex))
-    }
-
-    /// A deterministic walk of `n` vertices starting at `(x, y)`.
-    fn walk(x: i32, y: i32, n: i32) -> Vec<(i32, i32)> {
+    /// A column present on a single run of features, which byte-RLE codes in a few bytes.
+    fn one_run(n: usize) -> String {
         (0..n)
-            .map(|i| (x + i * 7 + (i * i) % 13, y + i * 3 - (i * 5) % 11))
+            .map(|i| if (64..96).contains(&i) { '1' } else { '0' })
             .collect()
     }
 
-    fn square_with_hole(x: i32, y: i32) -> Geometry<i32> {
-        Geometry::Polygon(Polygon::new(
-            ring(&[(x, y), (x + 90, y), (x + 90, y + 90), (x, y + 90)]),
-            vec![ring(&[
-                (x + 30, y + 30),
-                (x + 60, y + 30),
-                (x + 45, y + 60),
-            ])],
-        ))
+    #[test]
+    fn the_web_profile_stores_presence_as_a_bitmap() {
+        let mask = one_run(256);
+        let l = layer(points(&"1".repeat(256)), None, &[("v", opt_col(&mask))]);
+        let web = EncoderConfig::from_profile(Profile::Web(Network::Cellular4G));
+        assert_differential_with(&l, web);
+        let dump = dump_text(&l.encode(web.with_wire_version(WireVersion::V02)).unwrap());
+        assert!(dump.contains("presence = Inline(Bitmap)"), "{dump}");
     }
 
-    fn lines() -> Vec<Geometry<i32>> {
-        (0..40).map(|i| line(&walk(i * 50, i * 20, 25))).collect()
+    #[test]
+    fn the_uncompressed_profile_codes_a_run_of_presence_byte_rle() {
+        let mask = one_run(256);
+        let l = layer(points(&"1".repeat(256)), None, &[("v", opt_col(&mask))]);
+        let offline = EncoderConfig::from_profile(Profile::Web(Network::Offline));
+        assert_differential_with(&l, offline);
+        let offline = offline.with_wire_version(WireVersion::V02);
+        let dump = dump_text(&l.encode(offline).unwrap());
+        assert!(dump.contains("presence = Inline(ByteRle)"), "{dump}");
+        let bitmap = l.encode(offline.with_presence_rle(false)).unwrap();
+        assert!(l.encode(offline).unwrap().len() < bitmap.len());
     }
 
-    fn polygons() -> Vec<Geometry<i32>> {
-        (0..60)
-            .map(|i| {
-                if i % 3 == 0 {
-                    Geometry::MultiPolygon(MultiPolygon(vec![
-                        Polygon::new(ring(&walk(i * 40, 0, 12)), vec![]),
-                        Polygon::new(ring(&walk(i * 40, 500, 9)), vec![]),
-                    ]))
-                } else {
-                    square_with_hole(i * 100, i * 30)
-                }
-            })
-            .collect()
-    }
-
-    fn mixed() -> Vec<Geometry<i32>> {
-        (0..90)
-            .map(|i| match i % 3 {
-                0 => pt(i * 11, i * 13),
-                1 => line(&walk(i * 30, 0, 15)),
-                _ => square_with_hole(i * 40, 900),
-            })
-            .collect()
-    }
-
-    #[rstest]
-    #[case::lines(lines())]
-    #[case::polygons(polygons())]
-    #[case::mixed(mixed())]
-    fn vertices_are_rans_coded_and_decode_unchanged(#[case] geoms: Vec<Geometry<i32>>) {
-        let l = layer(geoms, None, &[]);
-        let plain = l.encode(cfg_v2()).unwrap();
-        let rans = l.encode(cfg_rans()).unwrap();
-        assert_eq!(
-            vertex_logicals(&rans),
-            [LogicalEncoding::Vertex(VertexLogical::Rans)]
-        );
+    #[test]
+    fn a_bool_column_codes_its_values_byte_rle_when_allowed() {
+        let values: Vec<PropValue> = (0..256)
+            .map(|i| PropValue::Bool(Some((64..96).contains(&i))))
+            .collect();
+        let l = layer(points(&"1".repeat(256)), None, &[("b", values)]);
+        assert_differential_with(&l, cfg_v1().with_presence_rle(true));
+        let cfg = cfg_v2().with_presence_rle(true);
         assert!(
-            rans.len() < plain.len(),
-            "{} vs {}",
-            rans.len(),
-            plain.len()
-        );
-        assert_eq!(decode(&rans).1, decode(&plain).1);
-        assert_dump_covers(&rans);
-    }
-
-    #[rstest]
-    fn a_tessellated_layer_codes_its_vertices(#[values(false, true)] triangles_only: bool) {
-        let l = layer(polygons(), None, &[]);
-        let cfg = cfg_rans()
-            .with_tessellation(Tessellation::Always)
-            .with_triangles_only(triangles_only);
-        let rans = l.encode(cfg).unwrap();
-        assert_eq!(
-            vertex_logicals(&rans),
-            [LogicalEncoding::Vertex(VertexLogical::Rans)]
-        );
-        assert_eq!(
-            decode(&rans).1,
-            decode(&l.encode(cfg.with_rans_vertices(false)).unwrap()).1
-        );
-    }
-
-    #[test]
-    fn a_few_vertices_stay_componentwise_delta() {
-        let rans = layer(vec![pt(1, 2), pt(3, 4)], None, &[])
-            .encode(cfg_rans())
-            .unwrap();
-        assert_eq!(
-            vertex_logicals(&rans),
-            [LogicalEncoding::Vertex(VertexLogical::ComponentwiseDelta)]
-        );
-    }
-
-    #[test]
-    fn v1_ignores_rans_vertices() {
-        let l = layer(lines(), None, &[]);
-        assert_eq!(
-            l.encode(cfg_v1().with_rans_vertices(true)).unwrap(),
-            l.encode(cfg_v1()).unwrap()
+            l.encode(cfg).unwrap().len() < l.encode(cfg.with_presence_rle(false)).unwrap().len()
         );
     }
 }

@@ -4,10 +4,9 @@ use super::streams::{
     dict_may_be_beneficial, encode_hilbert_vertex_streams02, encode_hilbert_xyz_vertex_streams02,
     encode_level1_length_stream, encode_level1_without_ring_buffer_length_stream,
     encode_level2_length_stream, encode_morton_vertex_streams02, encode_predicted_vertex_stream02,
-    encode_rans_vertex_stream02, encode_ring_lengths_for_mixed, encode_root_length_stream,
-    encode_vec2_delta2_vertex_stream02, encode_vec2_vertex_stream02, encode_vec3_vertex_stream02,
-    normalize_geometry_offsets, normalize_part_offsets_for_rings, seed_curve_caches,
-    xyz_dict_may_be_beneficial,
+    encode_ring_lengths_for_mixed, encode_root_length_stream, encode_vec2_vertex_stream02,
+    encode_vec3_vertex_stream02, normalize_geometry_offsets, normalize_part_offsets_for_rings,
+    seed_curve_caches, xyz_dict_may_be_beneficial,
 };
 use crate::codecs::predicted::Run;
 use crate::codecs::tri::{self, TriTrees};
@@ -358,8 +357,8 @@ fn write_vertices(
     enc.family_context = Family::Vertex;
 
     match (enc.override_vertex_buffer_type(), tessellated) {
-        (Some(VertexBufferType::Rans), _) => {
-            encode_rans_vertex_stream02(vertices, runs()?.as_deref(), enc)?;
+        (Some(VertexBufferType::Predicted), _) => {
+            encode_predicted_vertex_stream02(vertices, &predicted()?, false, enc)?;
             return Ok(VertexStorage::Plain);
         }
         (Some(_), true) | (Some(VertexBufferType::Vec2), false) => {
@@ -369,7 +368,7 @@ fn write_vertices(
         // Predictions follow the outline topology, which a layer of triangles alone drops.
         (None, true) => {
             let predicted = runs()?.is_some().then_some(predicted);
-            write_plain_vertices(vertices, runs, predicted, enc, codecs)?;
+            write_plain_vertices(vertices, predicted, enc, codecs)?;
             return Ok(VertexStorage::Plain);
         }
         (Some(VertexBufferType::Morton), false) => {
@@ -384,7 +383,7 @@ fn write_vertices(
     }
 
     if !enc.config().allow_vertex_dict() || !dict_may_be_beneficial(vertices, enc) {
-        write_plain_vertices(vertices, runs, Some(predicted), enc, codecs)?;
+        write_plain_vertices(vertices, Some(predicted), enc, codecs)?;
         return Ok(VertexStorage::Plain);
     }
 
@@ -395,7 +394,7 @@ fn write_vertices(
         codecs,
         &[
             (VertexStorage::Plain, &|enc, codecs| {
-                write_plain_vertices(vertices, runs, Some(predicted), enc, codecs)
+                write_plain_vertices(vertices, Some(predicted), enc, codecs)
             }),
             (VertexStorage::Dict, &|enc, codecs| {
                 encode_hilbert_vertex_streams02(vertices, enc, codecs)
@@ -478,8 +477,8 @@ fn write_xyz_vertices(
             VertexBufferType::Morton => Err(MltError::NotImplemented(
                 "Morton vertices with z coordinates, since a Morton code spans only x and y",
             )),
-            VertexBufferType::Rans => Err(MltError::NotImplemented(
-                "rANS vertices with z coordinates, since its tables are defined over pairs",
+            VertexBufferType::Predicted => Err(MltError::NotImplemented(
+                "predicted vertices with z coordinates, since they are defined over pairs",
             )),
         };
     }
@@ -503,35 +502,23 @@ fn write_xyz_vertices(
     )
 }
 
-/// The plain vertex stream the encoder picks itself: componentwise delta, raced against second-order deltas,
-/// rANS and predicted vertices when the config allows them.
+/// The plain vertex stream the encoder picks itself: componentwise delta, raced against
+/// predicted vertices when the config allows them.
 fn write_plain_vertices(
     vertices: &[i32],
-    runs: &dyn Fn() -> MltResult<Option<Vec<u32>>>,
     predicted: Option<&dyn Fn() -> MltResult<Vec<Run>>>,
     enc: &mut Encoder,
     codecs: &mut Codecs,
 ) -> MltResult<()> {
-    let allow_delta2 = enc.config().allow_delta2();
-    let allow_rans = enc.config().allow_rans_vertices();
     let predicted = predicted.filter(|_| enc.config().allow_predicted_vertices());
-    if vertices.is_empty() || !(allow_delta2 || allow_rans || predicted.is_some()) {
+    let Some(runs) = predicted.filter(|_| !vertices.is_empty()) else {
         return encode_vec2_vertex_stream02(vertices, enc, codecs);
-    }
-    let offsets = if allow_rans { runs()? } else { None };
-    let predicted_runs = predicted.map(|runs| runs()).transpose()?;
+    };
+    let runs = runs()?;
     let mut alt = enc.try_alternatives();
     alt.with(|enc| encode_vec2_vertex_stream02(vertices, enc, codecs))?;
-    if allow_delta2 {
-        alt.with(|enc| encode_vec2_delta2_vertex_stream02(vertices, enc, codecs))?;
-    }
-    if allow_rans {
-        alt.with(|enc| encode_rans_vertex_stream02(vertices, offsets.as_deref(), enc))?;
-    }
-    if let Some(runs) = &predicted_runs {
-        for from_end in [false, true] {
-            alt.with(|enc| encode_predicted_vertex_stream02(vertices, runs, from_end, enc))?;
-        }
+    for from_end in [false, true] {
+        alt.with(|enc| encode_predicted_vertex_stream02(vertices, &runs, from_end, enc))?;
     }
     Ok(())
 }

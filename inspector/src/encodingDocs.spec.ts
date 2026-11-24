@@ -28,8 +28,6 @@ describe("the docs the app points at", () => {
   const STREAM_IDS = [
     "bool/byte-rle",
     "bool/none",
-    "float/alp",
-    "float/dict",
     "float/none",
     "int/delta",
     "int/delta-rle",
@@ -37,8 +35,7 @@ describe("the docs the app points at", () => {
     "int/rle",
     "vertex/componentwise-delta",
     "vertex/morton-delta",
-    "bit-packed",
-    "fastpfor[128le]",
+    "vertex/predicted",
     "fastpfor[256be]",
     "none",
     "varint",
@@ -75,7 +72,7 @@ describe("the docs the app points at", () => {
 
   /** The app ships inside the site, so a fork or a preview links into its own pages. */
   it("links a section relative to where the site embeds the app", () => {
-    expect(docs["encodings#alp"]?.site).toBe("../../encodings/#alp");
+    expect(docs["encodings#predicted"]?.site).toBe("../../encodings/#predicted");
     expect(docs["v2#tessellation"]?.site).toBe(
       "../../specification/v2/#tessellation",
     );

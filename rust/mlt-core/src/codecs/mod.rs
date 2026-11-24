@@ -1,10 +1,5 @@
-#[cfg(feature = "unstable-v2")]
-pub mod alp;
-#[cfg(feature = "unstable-v2")]
-pub mod bitpack;
 pub mod bytes;
 pub mod fastpfor;
-pub mod float;
 #[cfg(feature = "unstable-v2")]
 pub mod front_coding;
 pub mod fsst;
@@ -14,8 +9,6 @@ pub mod morton;
 pub mod predicted;
 #[cfg(feature = "unstable-v2")]
 pub mod presence_coding;
-#[cfg(feature = "unstable-v2")]
-pub mod rans;
 pub mod rle;
 #[cfg(feature = "unstable-v2")]
 pub(crate) mod tri;

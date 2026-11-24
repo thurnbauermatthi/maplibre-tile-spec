@@ -191,16 +191,6 @@ fn a_v2_fsst_corpus_decodes_to_the_strings_it_stands_for() {
 
 #[cfg(feature = "unstable-v2")]
 #[test]
-fn a_front_coded_fsst_corpus_decodes_to_the_whole_strings() {
-    let (tree, buf) = annotate(FSST_FRONT_V2);
-    insta::assert_snapshot!(
-        json(&decode_at(&tree, &buf, corpus_index(&tree), 0)),
-        @r#"{"kind":"strings","values":["residential_zone_north_sector_1","residential_zone_north_sector_2","residential_zone_north_sector_3"],"truncatedFrom":null}"#
-    );
-}
-
-#[cfg(feature = "unstable-v2")]
-#[test]
 fn an_fsst_corpus_that_is_not_utf8_decodes_to_an_error() {
     let (tree, mut buf) = annotate(FSST_V2);
     let symbols = tree
@@ -262,6 +252,16 @@ fn a_region_that_is_not_a_payload_is_an_error_not_a_panic() {
         panic!("an error");
     };
     assert!(message.contains("no region"), "{message}");
+}
+
+#[cfg(feature = "unstable-v2")]
+#[test]
+fn a_front_coded_fsst_corpus_decodes_to_the_whole_strings() {
+    let (tree, buf) = annotate(FSST_FRONT_V2);
+    insta::assert_snapshot!(
+        json(&decode_at(&tree, &buf, corpus_index(&tree), 0)),
+        @r#"{"kind":"strings","values":["residential_zone_north_sector_1","residential_zone_north_sector_2","residential_zone_north_sector_3"],"truncatedFrom":null}"#
+    );
 }
 
 #[test]

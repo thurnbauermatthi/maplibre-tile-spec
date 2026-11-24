@@ -27,10 +27,9 @@ impl Arbitrary<'_> for EncoderConfig {
         #[cfg(feature = "unstable-v2")]
         let config = config
             .with_wire_version(u.arbitrary()?)
-            .with_float_dict(u.arbitrary()?)
-            .with_float_alp(u.arbitrary()?)
-            .with_triangles_only(u.arbitrary()?)
-            .with_rans_vertices(u.arbitrary()?);
+            .with_presence_rle(u.arbitrary()?)
+            .with_predicted_vertices(u.arbitrary()?)
+            .with_triangles_only(u.arbitrary()?);
         Ok(config)
     }
 }

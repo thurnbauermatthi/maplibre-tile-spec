@@ -1,8 +1,7 @@
-import { type ByteReader, allocU8, readBytes, readVarintU64 } from "./binary";
+import { type ByteReader, allocU8, readBytes, readU8 } from "./binary";
 
 export const PRES_BITMAP = 0;
-export const PRES_RUNS = 1;
-export const PRES_SPARSE = 2;
+export const PRES_BYTE_RLE = 1;
 
 const POP = new Uint8Array(256);
 for (let i = 1; i < 256; i++) POP[i] = POP[i >> 1] + (i & 1);
@@ -84,40 +83,25 @@ export function scatterPresent<T>(
 export function readPresenceBits(r: ByteReader, count: number, coding: number): Uint8Array {
     const byteLen = (count + 7) >>> 3;
     if (coding === PRES_BITMAP) return maskBitmapTail(readBytes(r, byteLen), count);
-    if (coding === PRES_SPARSE) {
-        const sumLen = (byteLen + 7) >>> 3;
-        const summary = readBytes(r, sumLen);
-        for (let b = byteLen; b < sumLen * 8; b++) {
-            if (((summary[b >>> 3] >>> (b & 7)) & 1) !== 0) throw new Error("sparse summary");
-        }
-        const stored = readBytes(r, bitmapPopcount(summary, byteLen));
+    if (coding === PRES_BYTE_RLE) {
         const plain = allocU8(byteLen);
-        let s = 0;
-        for (let i = 0; i < byteLen; i++) {
-            if (((summary[i >>> 3] >>> (i & 7)) & 1) !== 0) {
-                const v = stored[s++];
-                if (v === 0) throw new Error("sparse zero");
-                plain[i] = v;
+        let produced = 0;
+        while (produced < byteLen) {
+            const control = readU8(r);
+            if (control >= 128) {
+                const len = 256 - control;
+                if (produced + len > byteLen) throw new Error("presence rle overflow");
+                plain.set(readBytes(r, len), produced);
+                produced += len;
+            } else {
+                const len = control + 3;
+                const val = readU8(r);
+                if (produced + len > byteLen) throw new Error("presence rle overflow");
+                plain.fill(val, produced, produced + len);
+                produced += len;
             }
         }
         return maskBitmapTail(plain, count);
-    }
-    if (coding === PRES_RUNS) {
-        const plain = allocU8(byteLen);
-        let at = 0;
-        let present = false;
-        const maxBig = BigInt(count);
-        while (at < count) {
-            const lenBig = readVarintU64(r);
-            if (lenBig > maxBig - BigInt(at)) throw new Error("runs overflow");
-            const end = at + Number(lenBig);
-            if (present) {
-                for (let i = at; i < end; i++) plain[i >>> 3] |= 1 << (i & 7);
-            }
-            at = end;
-            present = !present;
-        }
-        return plain;
     }
     throw new Error("presence coding");
 }

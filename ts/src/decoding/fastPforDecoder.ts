@@ -288,23 +288,6 @@ function unpackBlock256(
 }
 
 /**
- * Unpacks one 128-value block: four sequential 32-value groups, as the v2 encoder writes them.
- */
-function unpackBlock128(
-    inValues: Uint32Array,
-    inPos: number,
-    out: Uint32Array,
-    outPos: number,
-    bitWidth: number,
-): number {
-    for (let k = 0; k < 128; k = (k + 32) | 0) {
-        fastUnpack32(inValues, inPos, out, (outPos + k) | 0, bitWidth);
-        inPos = (inPos + bitWidth) | 0;
-    }
-    return inPos;
-}
-
-/**
  * Reads and validates the 2-byte block header from the byteContainer.
  *
  * @remarks
@@ -422,7 +405,6 @@ function applyBlockExceptions(
     bytePosIn: number,
     workspace: FastPforDecoderWorkspace,
     block: number,
-    blockSize: number,
 ): number {
     const {
         maxBits,
@@ -435,11 +417,6 @@ function applyBlockExceptions(
         const shift = 1 << bitWidth;
         for (let k = 0; k < exceptionCount; k = (k + 1) | 0) {
             const pos = byteContainer[bytePosIn++];
-            if (pos >= blockSize) {
-                throw new Error(
-                    `FastPFOR decode: exception position ${pos} is past the ${blockSize}-value block ${block}`,
-                );
-            }
             out[(pos + blockOutPos) | 0] |= shift;
         }
         return bytePosIn;
@@ -464,9 +441,6 @@ function applyBlockExceptions(
 
     for (let k = 0; k < exceptionCount; k = (k + 1) | 0) {
         const pos = byteContainer[bytePosIn++];
-        if (pos >= blockSize) {
-            throw new Error(`FastPFOR decode: exception position ${pos} is past the ${blockSize}-value block ${block}`);
-        }
         const val = exceptionValues[exPtr++] | 0;
         out[(pos + blockOutPos) | 0] |= val << bitWidth;
     }
@@ -485,7 +459,6 @@ function decodePageBlocks(
     byteContainer: Uint8Array,
     byteContainerLen: number,
     workspace: FastPforDecoderWorkspace,
-    blockSize: number,
 ): void {
     let tmpInPos = inPos | 0;
     let bytePosIn = 0;
@@ -496,25 +469,22 @@ function decodePageBlocks(
         const bitWidth = header.bitWidth;
         const exceptionCount = header.exceptionCount;
 
-        const blockOutPos = (outPos + run * blockSize) | 0;
+        const blockOutPos = (outPos + run * BLOCK_SIZE) | 0;
 
         switch (bitWidth) {
             case 0:
-                out.fill(0, blockOutPos, blockOutPos + blockSize);
+                out.fill(0, blockOutPos, blockOutPos + BLOCK_SIZE);
                 break;
 
             case 32:
-                for (let i = 0; i < blockSize; i = (i + 1) | 0) {
+                for (let i = 0; i < BLOCK_SIZE; i = (i + 1) | 0) {
                     out[(blockOutPos + i) | 0] = inValues[(tmpInPos + i) | 0] | 0;
                 }
-                tmpInPos = (tmpInPos + blockSize) | 0;
+                tmpInPos = (tmpInPos + BLOCK_SIZE) | 0;
                 break;
 
             default:
-                tmpInPos =
-                    blockSize === BLOCK_SIZE
-                        ? unpackBlock256(inValues, tmpInPos, out, blockOutPos, bitWidth)
-                        : unpackBlock128(inValues, tmpInPos, out, blockOutPos, bitWidth);
+                tmpInPos = unpackBlock256(inValues, tmpInPos, out, blockOutPos, bitWidth);
                 break;
         }
 
@@ -529,7 +499,6 @@ function decodePageBlocks(
                 bytePosIn,
                 workspace,
                 run,
-                blockSize,
             );
         }
     }
@@ -553,7 +522,6 @@ function decodePage(
     outPos: number,
     thisSize: number,
     workspace: FastPforDecoderWorkspace,
-    blockSize: number,
 ): number {
     const pageStart = inPos | 0;
     const whereMeta = inValues[pageStart] | 0;
@@ -586,7 +554,7 @@ function decodePage(
     const exceptionPointers = workspace.dataPointers;
     exceptionPointers.fill(0);
     const startOutPos = outPos | 0;
-    const blocks = (thisSize / blockSize) | 0;
+    const blocks = (thisSize / BLOCK_SIZE) | 0;
     decodePageBlocks(
         inValues,
         pageStart,
@@ -598,7 +566,6 @@ function decodePage(
         byteContainer,
         byteContainerLen,
         workspace,
-        blockSize,
     );
 
     return inExcept;
@@ -611,16 +578,15 @@ function decodeAlignedPages(
     outPos: number,
     outLength: number,
     workspace: FastPforDecoderWorkspace,
-    blockSize: number,
 ): number {
-    const alignedOutLength = greatestMultiple(outLength, blockSize);
+    const alignedOutLength = greatestMultiple(outLength, BLOCK_SIZE);
     const finalOut = outPos + alignedOutLength;
     let tmpOutPos = outPos;
     let tmpInPos = inPos;
 
     while (tmpOutPos !== finalOut) {
         const thisSize = Math.min(PAGE_SIZE, finalOut - tmpOutPos);
-        tmpInPos = decodePage(inValues, out, tmpInPos, tmpOutPos, thisSize, workspace, blockSize);
+        tmpInPos = decodePage(inValues, out, tmpInPos, tmpOutPos, thisSize, workspace);
         tmpOutPos = (tmpOutPos + thisSize) | 0;
     }
 
@@ -687,14 +653,12 @@ function decodeVByte(
  * @param encoded The input buffer containing FastPFOR encoded data.
  * @param numValues The number of integers expected to be decoded.
  * @param workspace Optional workspace for reuse across calls. If omitted, a new workspace is created per call.
- * @param blockSize Values per block: 256 for the v1 wire format, 128 for v2. Both pack a block as sequential
- *     32-value groups, so only the block length and the page alignment differ.
+ * @param out Optional destination buffer of length at least `numValues`.
  */
 export function decodeFastPforInt32(
     encoded: Uint32Array,
     numValues: number,
     workspace?: FastPforDecoderWorkspace,
-    blockSize: 256 | 128 = BLOCK_SIZE,
     out?: Uint32Array,
 ): Uint32Array {
     let inPos = 0;
@@ -710,9 +674,9 @@ export function decodeFastPforInt32(
         const alignedLength = encoded[inPos] >>> 0;
         inPos = (inPos + 1) | 0;
 
-        if ((alignedLength & (blockSize - 1)) !== 0) {
+        if ((alignedLength & (BLOCK_SIZE - 1)) !== 0) {
             throw new Error(
-                `FastPFOR decode: invalid alignedLength=${alignedLength} (expected multiple of ${blockSize})`,
+                `FastPFOR decode: invalid alignedLength=${alignedLength} (expected multiple of ${BLOCK_SIZE})`,
             );
         }
 
@@ -722,7 +686,7 @@ export function decodeFastPforInt32(
             );
         }
 
-        inPos = decodeAlignedPages(encoded, decoded, inPos, outPos, alignedLength, decoderWorkspace, blockSize);
+        inPos = decodeAlignedPages(encoded, decoded, inPos, outPos, alignedLength, decoderWorkspace);
         outPos = (outPos + alignedLength) | 0;
     }
 

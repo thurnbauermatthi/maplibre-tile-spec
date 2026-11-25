@@ -150,11 +150,6 @@ export function readVarintU64(r: ByteReader): bigint {
     }
 }
 
-export function readVarintI64(r: ByteReader): bigint {
-    const u = readVarintU64(r);
-    return (u >> 1n) ^ -(u & 1n);
-}
-
 export function decodeVarintU32Into(bytes: Uint8Array, count: number, out: Uint32Array): Uint32Array {
     const r = cursor(bytes);
     for (let i = 0; i < count; i++) out[i] = readVarintU32(r);
@@ -208,53 +203,6 @@ export function copyLittleEndian<T extends ArrayBufferView & { set(src: T): void
     return out;
 }
 
-export function unpackBitpackU32Into(data: Uint8Array, count: number, out: Uint32Array): Uint32Array {
-    if (data.length === 0) throw new Error("bitpack");
-    const width = data[0];
-    if (width < 1 || width > 32 || data.length - 1 !== Math.ceil((count * width) / 8)) {
-        throw new Error("bitpack");
-    }
-    if (width <= 24) {
-        const mask = (1 << width) - 1;
-        let acc = 0;
-        let bits = 0;
-        let p = 1;
-        for (let i = 0; i < count; i++) {
-            while (bits < width) {
-                acc |= data[p++] << bits;
-                bits += 8;
-            }
-            out[i] = acc & mask;
-            acc >>>= width;
-            bits -= width;
-        }
-        return out;
-    }
-    const mask = 0xffffffff >>> (32 - width);
-    let bitPos = 8;
-    const end = data.length;
-    for (let i = 0; i < count; i++) {
-        const bi = bitPos >>> 3;
-        const sh = bitPos & 7;
-        const lo32 =
-            ((data[bi] ?? 0) |
-                ((data[bi + 1] ?? 0) << 8) |
-                ((data[bi + 2] ?? 0) << 16) |
-                ((data[bi + 3] ?? 0) << 24)) >>>
-            0;
-        const raw = sh === 0 ? lo32 : (lo32 >>> sh) | ((bi + 4 < end ? data[bi + 4] : 0) << (32 - sh));
-        out[i] = (raw & mask) >>> 0;
-        bitPos += width;
-    }
-    return out;
-}
-
-export function unpackBitpackU64Into(data: Uint8Array, count: number, out: BigUint64Array): BigUint64Array {
-    const tmp = unpackBitpackU32Into(data, count, scratchU32(count));
-    for (let i = 0; i < count; i++) out[i] = BigInt(tmp[i]);
-    return out;
-}
-
 export function decodeRleInterleavedU32(data: Uint32Array, total: number, out: Uint32Array): Uint32Array {
     if ((data.length & 1) !== 0) throw new Error("rle odd");
     let pos = 0;
@@ -292,29 +240,23 @@ export function zigzagI32InPlace(buf: Uint32Array): Int32Array {
     return out;
 }
 
-export function zigzagDelta32InPlace(buf: Uint32Array, order = 1): Uint32Array {
+export function zigzagDelta32InPlace(buf: Uint32Array): Uint32Array {
     const i32 = asI32(buf);
     let v = 0;
-    let d = 0;
     for (let i = 0; i < i32.length; i++) {
-        const z = (i32[i] >>> 1) ^ -(i32[i] & 1);
-        d = order === 2 ? (d + z) | 0 : z;
-        v = (v + d) | 0;
+        v = (v + ((i32[i] >>> 1) ^ -(i32[i] & 1))) | 0;
         i32[i] = v;
     }
     return buf;
 }
 
-export function cwDeltaVecInPlace(buf: Uint32Array, dim: 2 | 3, order = 1): Int32Array {
+export function cwDeltaVecInPlace(buf: Uint32Array, dim: 2 | 3): Int32Array {
     if (buf.length % dim !== 0) throw new Error("vec len");
     const out = asI32(buf);
     const v = [0, 0, 0];
-    const d = [0, 0, 0];
     for (let i = 0; i < out.length; i += dim) {
         for (let c = 0; c < dim; c++) {
-            const z = (out[i + c] >>> 1) ^ -(out[i + c] & 1);
-            d[c] = order === 2 ? (d[c] + z) | 0 : z;
-            v[c] = (v[c] + d[c]) | 0;
+            v[c] = (v[c] + ((out[i + c] >>> 1) ^ -(out[i + c] & 1))) | 0;
             out[i + c] = v[c];
         }
     }
@@ -330,62 +272,15 @@ export function zigzagI64InPlace(buf: BigUint64Array): BigInt64Array {
 const I64_MIN = -0x8000000000000000n;
 const I64_MAX = 0x7fffffffffffffffn;
 
-export function zigzagDelta64InPlace(buf: BigUint64Array, order = 1): BigUint64Array {
+export function zigzagDelta64InPlace(buf: BigUint64Array): BigUint64Array {
     let v = 0n;
-    let d = 0n;
     for (let i = 0; i < buf.length; i++) {
         const u = buf[i];
-        const z = (u >> 1n) ^ -(u & 1n);
-        if (order === 2) {
-            d += z;
-            if (d < I64_MIN || d > I64_MAX) d = BigInt.asIntN(64, d);
-        } else {
-            d = z;
-        }
-        v += d;
+        v += (u >> 1n) ^ -(u & 1n);
         if (v < I64_MIN || v > I64_MAX) v = BigInt.asIntN(64, v);
         buf[i] = v >= 0n ? v : BigInt.asUintN(64, v);
     }
     return buf;
-}
-
-const POW10: readonly number[] = [
-    1, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18,
-];
-const FRAC10: readonly number[] = [
-    1, 1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10, 1e-11, 1e-12, 1e-13, 1e-14, 1e-15, 1e-16, 1e-17,
-    1e-18,
-];
-const ALP_MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
-const ALP_MIN_SAFE = BigInt(Number.MIN_SAFE_INTEGER);
-
-export function parseAlpScale(code: number): number {
-    if (code >= 190) throw new Error("alp scale");
-    let e = 0;
-    while (((e + 1) * (e + 2)) / 2 <= code) e++;
-    return (e << 8) | (code - (e * (e + 1)) / 2);
-}
-
-export function decodeAlpFloats(
-    offsets: Uint32Array | BigUint64Array,
-    base: bigint,
-    scalePack: number,
-    isF32: boolean,
-): Float32Array | Float64Array {
-    const n = offsets.length;
-    const out = isF32 ? allocF32(n) : allocF64(n);
-    const down = POW10[scalePack & 0xff];
-    const upRecip = FRAC10[scalePack >>> 8];
-    const baseNum = Number(base);
-    if (offsets instanceof Uint32Array && base >= ALP_MIN_SAFE && base + 0xffffffffn <= ALP_MAX_SAFE) {
-        for (let i = 0; i < n; i++) out[i] = (baseNum + offsets[i]) * down * upRecip;
-        return out;
-    }
-    for (let i = 0; i < n; i++) {
-        const digits = BigInt.asIntN(64, base + BigInt(offsets[i]));
-        out[i] = Number(digits) * down * upRecip;
-    }
-    return out;
 }
 
 const COMPACT_16 = new Uint8Array(65536);

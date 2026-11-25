@@ -17,10 +17,8 @@ import {
     FM_FLOAT,
     FM_INT,
     HAS_EXPLICIT_COUNT,
-    LG_DICT,
     type ParsedStream,
     ST_DATA_NONE,
-    ST_DATA_SINGLE,
     ST_LEN_NESTED,
     ST_PRESENT,
     decodeBoolValues,
@@ -39,11 +37,9 @@ const MAX_NESTED_DEPTH = 8;
 const SHAPES_BIT = 0x40;
 const NODE_COST = 64;
 
-export type RawScalarColumn02 =
-    | { dt: 2 | 3 | 4 | 5 | 6 | 7 | 8; s: ParsedStream; d: null }
-    | { dt: 9 | 10; s: ParsedStream; d: ParsedStream | null };
+export type RawScalarColumn02 = { dt: 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10; s: ParsedStream };
 
-export type RawColumnValues02 = RawScalarColumn02 | { dt: 11; s: RawStringsStreamSet; d: null };
+export type RawColumnValues02 = RawScalarColumn02 | { dt: 11; s: RawStringsStreamSet };
 
 export type DecodedScalar =
     | { kind: "bool"; values: Uint8Array }
@@ -73,24 +69,22 @@ export function decodeScalarValues(cv: RawScalarColumn02, scratch = false, owned
         case 8:
             return { kind: "u64", values: decodeStreamU64(cv.s, owned64) };
         case 9:
-            return { kind: "f32", values: decodeFloatValues(cv.s, cv.d, true) as Float32Array };
+            return { kind: "f32", values: decodeFloatValues(cv.s, true) as Float32Array };
         case 10:
-            return { kind: "f64", values: decodeFloatValues(cv.s, cv.d, false) as Float64Array };
+            return { kind: "f64", values: decodeFloatValues(cv.s, false) as Float64Array };
     }
 }
 
 export function parseColumnValues02(r: ByteReader, dt: number, impliedCount: number): RawColumnValues02 {
     if (impliedCount < 0 && (peekU8(r) & HAS_EXPLICIT_COUNT) === 0) throw new Error("explicit count");
-    if (dt === 2) return { dt: 2, s: parseStream02(r, FM_BOOL, 4, ST_DATA_NONE, impliedCount), d: null };
+    if (dt === 2) return { dt: 2, s: parseStream02(r, FM_BOOL, 4, ST_DATA_NONE, impliedCount) };
     if (dt >= 3 && dt <= 6)
-        return { dt: dt as 3 | 4 | 5 | 6, s: parseStream02(r, FM_INT, 4, ST_DATA_NONE, impliedCount), d: null };
-    if (dt === 7 || dt === 8) return { dt, s: parseStream02(r, FM_INT, 8, ST_DATA_NONE, impliedCount), d: null };
+        return { dt: dt as 3 | 4 | 5 | 6, s: parseStream02(r, FM_INT, 4, ST_DATA_NONE, impliedCount) };
+    if (dt === 7 || dt === 8) return { dt, s: parseStream02(r, FM_INT, 8, ST_DATA_NONE, impliedCount) };
     if (dt === 9 || dt === 10) {
-        const w = dt === 9 ? 4 : 8;
-        const s = parseStream02(r, FM_FLOAT, w, ST_DATA_NONE, impliedCount);
-        return { dt, s, d: s.l === LG_DICT ? parseStream02(r, FM_FLOAT, w, ST_DATA_SINGLE, s.n) : null };
+        return { dt, s: parseStream02(r, FM_FLOAT, dt === 9 ? 4 : 8, ST_DATA_NONE, impliedCount) };
     }
-    if (dt === 11) return { dt: 11, s: parseStrings02(r, impliedCount), d: null };
+    if (dt === 11) return { dt: 11, s: parseStrings02(r, impliedCount) };
     throw new Error("col type");
 }
 

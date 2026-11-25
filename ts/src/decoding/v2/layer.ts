@@ -40,6 +40,7 @@ import {
 import {
     type MutableIndexable,
     PRES_BITMAP,
+    PRES_BYTE_RLE,
     bitmapPopcount,
     isBitSet,
     normalizePresentBitmap,
@@ -142,21 +143,11 @@ function decodeValueProp02(
     }
 }
 
-function readColPresence02(
-    r: ByteReader,
-    high: number,
-    sharedBitfields: readonly Uint8Array[],
-    featureCount: number,
-): Uint8Array | undefined {
+function readColPresence02(r: ByteReader, high: number, featureCount: number): Uint8Array | undefined {
     if (high === 0x00) return undefined;
-    if (high < 0x40) {
-        const code = (high >>> 4) - 1;
-        if (code > 2) throw new Error("v2 pres");
-        return readPresenceBits(r, featureCount, code);
-    }
-    const idx = (high - 0x40) >>> 4;
-    if (idx >= sharedBitfields.length) throw new Error("v2 spres");
-    return sharedBitfields[idx];
+    if (high === 0x10) return readPresenceBits(r, featureCount, PRES_BITMAP);
+    if (high === 0x20) return readPresenceBits(r, featureCount, PRES_BYTE_RLE);
+    throw new Error("v2 pres");
 }
 
 function decodeMValue02(
@@ -210,24 +201,11 @@ function decodeLayer02(r: ByteReader, includeNested: boolean, nestedJsonMode: bo
     const featureCount = readVarintU32(r);
 
     const layout = readU8(r);
-    const sharedCoded = (layout & 0x80) !== 0;
-    const sharedCount = (layout & 0x70) >>> 4;
+    if ((layout & 0xf0) !== 0) throw new Error("v2 layout");
     const geoLayout = layout & 0x0f;
-    if ((sharedCoded && sharedCount === 0) || geoLayout > 0x0e) throw new Error("v2 layout");
+    if (geoLayout > 0x0e) throw new Error("v2 layout");
     if (hasMValues && (geoLayout === 0 || geoLayout === 1 || geoLayout === 0x0c)) throw new Error("v2 mval layout");
     if ((uniformType === GEOM_MESH) !== (geoLayout === 0x0e)) throw new Error("v2 mesh layout");
-
-    const sharedBitfields: Uint8Array[] = new Array(sharedCount);
-    for (let i = 0; i < sharedCount; i++) {
-        let coding = PRES_BITMAP;
-        if (sharedCoded) {
-            const cb = readU8(r);
-            if ((cb & 0x8f) !== 0) throw new Error("v2 spres byte");
-            coding = (cb & 0x70) >>> 4;
-            if (coding > 2) throw new Error("v2 spres code");
-        }
-        sharedBitfields[i] = readPresenceBits(r, featureCount, coding);
-    }
 
     const typesStream = uniformType >= 0 ? null : parseStream02(r, FM_INT, 4, ST_LEN_VARBIN, featureCount);
     const items: ParsedStream[] = [];
@@ -294,7 +272,7 @@ function decodeLayer02(r: ByteReader, includeNested: boolean, nestedJsonMode: bo
                 if ((cb & 0x0f) !== 0x0b) throw new Error("v2 sdict ch");
                 const suffix = readStr(r);
                 reg(`${prefix}${suffix}`);
-                const cBits = readColPresence02(r, cb & 0xf0, sharedBitfields, featureCount);
+                const cBits = readColPresence02(r, cb & 0xf0, featureCount);
                 const cCount = cBits === undefined ? featureCount : bitmapPopcount(cBits, featureCount);
                 shared.children[c] = {
                     suffix,
@@ -307,7 +285,7 @@ function decodeLayer02(r: ByteReader, includeNested: boolean, nestedJsonMode: bo
         }
 
         const colName = data >= 2 ? readStr(r) : "";
-        const bits = readColPresence02(r, high, sharedBitfields, featureCount);
+        const bits = readColPresence02(r, high, featureCount);
         const dCount = bits === undefined ? featureCount : bitmapPopcount(bits, featureCount);
 
         if (data <= 1) {
@@ -345,7 +323,7 @@ function decodeLayer02(r: ByteReader, includeNested: boolean, nestedJsonMode: bo
             }
             const mName = readStr(r);
             reg(mName);
-            const bits = readColPresence02(r, tb & 0xf0, sharedBitfields, featureCount);
+            const bits = readColPresence02(r, tb & 0xf0, featureCount);
             const col = decodeMValue02(mName, scope, bits, parseColumnValues02(r, data, -1), geometry, featureCount);
             mValues[m] = col;
             if (scope === "triangle") triangleValues.push(col);

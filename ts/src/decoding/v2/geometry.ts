@@ -6,9 +6,9 @@ import {
     decodeRootLengthStream,
 } from "../geometryDecoder";
 import { EMPTY_I32, EMPTY_U32, allocI32, allocU8, allocU32, chargeBytes, checkScratchBytes } from "./binary";
-import { decodeRansVertices } from "./rans";
+import { decodePredictedVertices } from "./predicted";
 import {
-    LG_RANS,
+    LG_PREDICTED,
     NO_Z,
     type ParsedStream,
     ST_DATA_VERTEX,
@@ -243,13 +243,9 @@ export function decodeGeometry02(
     let vertices: Int32Array;
     if (!vertexStream) {
         vertices = EMPTY_I32;
-    } else if (vertexStream.l === LG_RANS) {
-        if (hasDict) throw new Error("rans dict");
-        vertices = decodeRansVertices(
-            vertexStream.d,
-            levels.ringOffsets ?? levels.partOffsets ?? levels.geometryOffsets,
-            vertexStream.w,
-        );
+    } else if (vertexStream.l === LG_PREDICTED) {
+        if (hasDict) throw new Error("predicted dict");
+        vertices = decodePredictedVertices(vertexStream.d, types, levels, vertexStream.n);
     } else {
         vertices = decodeStreamI32(vertexStream, hasDict);
     }

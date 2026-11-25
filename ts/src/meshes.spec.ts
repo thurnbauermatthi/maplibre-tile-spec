@@ -1,7 +1,8 @@
 import { readdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { decodeAlpFloats, parseAlpScale, resetBudget, setOwnProp } from "./decoding/v2/binary";
+import { cursor, resetBudget, setOwnProp } from "./decoding/v2/binary";
+import { PRES_BYTE_RLE, readPresenceBits } from "./decoding/v2/presence";
 import { sliceStrings } from "./decoding/v2/strings";
 import {
     columnValue,
@@ -169,15 +170,13 @@ describe("MLT v2 3D Meshes, Z-axis, M-values, and Columnar APIs", () => {
         expect(() => decodeTileColumns(readSynthetic02("props_str_dict").mlt, { maxBytes: 8 })).toThrow(RangeError);
     });
 
-    it("enforces exact ALP two-step IEEE-754 rounding, multibyte UTF-8 bounds, __proto__ safety, and block framing", () => {
+    it("enforces ByteRLE presence bounds, multibyte UTF-8 bounds, __proto__ safety, and block framing", () => {
         resetBudget();
-        // Exact Rust reference case: 3 * 1e0 * 1e-1 === 0.30000000000000004 (differs from 3 / 10 === 0.3)
-        const alp03 = decodeAlpFloats([0], BigInt(3), parseAlpScale(1), false) as Float64Array;
-        expect(Object.is(alp03[0], 3 * 1 * 1e-1)).toBe(true);
-        // Full i64 range beyond Number.MAX_SAFE_INTEGER
-        const bigCode = BigInt(1) << BigInt(55);
-        const alpBig = decodeAlpFloats([0], bigCode, parseAlpScale(0), false) as Float64Array;
-        expect(alpBig[0]).toBe(Number(bigCode));
+        // 24 present bits followed by 24 absent bits: [0x00, 0xFF] repeats 0xFF x3, [0x00, 0x00] repeats 0x00 x3
+        const rleMask = readPresenceBits(cursor(new Uint8Array([0x00, 0xff, 0x00, 0x00])), 48, PRES_BYTE_RLE);
+        expect(Array.from(rleMask)).toEqual([0xff, 0xff, 0xff, 0x00, 0x00, 0x00]);
+        // Repeat run of 3 bytes over a 16-bit (2-byte) bitmap must throw
+        expect(() => readPresenceBits(cursor(new Uint8Array([0x00, 0xff])), 16, PRES_BYTE_RLE)).toThrow();
 
         // Multibyte UTF-8 + astral surrogate pairs + split-codepoint rejection
         const enc = new TextEncoder();
@@ -232,6 +231,7 @@ describe("MLT v2 3D Meshes, Z-axis, M-values, and Columnar APIs", () => {
             readSynthetic02("nested_struct_shapes").mlt,
             readSynthetic02("mesh_mvalues_both").mlt,
             readSynthetic02("z_poly_hole_tes").mlt,
+            readSynthetic02("poly_hole_tes_predicted").mlt,
         ];
 
         // 1. Every strict prefix truncation must throw cleanly (or decode empty at length 0)

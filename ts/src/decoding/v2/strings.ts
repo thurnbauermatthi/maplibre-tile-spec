@@ -137,7 +137,7 @@ export function parseStrings02(r: ByteReader, impliedCount: number): RawStringsS
     if (layout === 2) {
         const symLens = parseStream02(r, FM_INT, 4, ST_LEN_SYM, next);
         const symTbl = parseStream02(r, FM_BYTES, 4, ST_DATA_FSST, next);
-        const corpus = parseStream02(r, FM_BYTES, 4, ST_DATA_SINGLE, next);
+        const corpus = parseStream02(r, FM_BYTES, 4, ST_DATA_NONE, next);
         return { m: 2, lengths: leading, symLens, symTbl, corpus, n: next };
     }
     const lengths = parseStream02(r, FM_INT, 4, ST_LEN_DICT, next);

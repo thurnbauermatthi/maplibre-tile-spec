@@ -83,29 +83,14 @@ public:
     inline void set_allow_triangles_only(bool enabled);
 
     /**
-     * v2 only: allow integer and vertex streams to store the deltas of their deltas.
+     * v2 only: allow plain vertex streams to be stored as predicted vertices.
      */
-    inline void set_allow_delta2(bool enabled);
+    inline void set_allow_predicted_vertices(bool enabled);
 
     /**
-     * v2 only: allow float columns to store one code per value into a dictionary.
+     * v2 only: allow presence bitfields and bool columns to be byte-RLE coded, an extension.
      */
-    inline void set_allow_float_dict(bool enabled);
-
-    /**
-     * v2 only: allow float columns to store each value as a decimal-scaled integer (ALP).
-     */
-    inline void set_allow_float_alp(bool enabled);
-
-    /**
-     * v2 only: allow dictionary code streams to be bit-packed.
-     */
-    inline void set_allow_packed_dict_codes(bool enabled);
-
-    /**
-     * v2 only: allow plain vertex streams to be rANS-coded.
-     */
-    inline void set_allow_rans_vertices(bool enabled);
+    inline void set_allow_presence_rle(bool enabled);
 
     /**
      * v2 only: let a nested struct or map code its row shapes instead of per-field presence.

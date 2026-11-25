@@ -415,31 +415,29 @@ fn check_meshes(
     Ok(())
 }
 
-/// Decode the vertex stream once the topology `levels` is known, since rANS codes it over their runs.
+/// Decode the vertex stream once the topology `levels` is known, since predicted vertices are coded over their runs.
 #[cfg_attr(
     not(feature = "unstable-v2"),
-    expect(unused_variables, reason = "only rANS reads the topology")
+    expect(unused_variables, reason = "only predicted vertices read the topology")
 )]
 fn decode_vertex_stream(
     stream: RawStream<'_>,
+    types: &[GeometryType],
     levels: &Levels,
     dictionary: bool,
     dec: &mut Decoder,
 ) -> MltResult<Vec<i32>> {
     #[cfg(feature = "unstable-v2")]
-    if stream.meta.encoding.logical == LogicalEncoding::Vertex(VertexLogical::Rans) {
+    if stream.meta.encoding.logical == LogicalEncoding::Vertex(VertexLogical::Predicted) {
         if dictionary {
             return Err(MltError::UnsupportedLogicalEncoding(
                 stream.meta.encoding.logical,
                 "a vertex dictionary",
             ));
         }
-        return crate::codecs::rans::decode_vertices(
-            stream.data,
-            run_offsets(levels),
-            stream.meta.num_words()?,
-            dec,
-        );
+        let vertex_count = (stream.meta.num_words()? / 2).into_usize();
+        let runs = crate::codecs::predicted::runs(types, levels, vertex_count)?;
+        return crate::codecs::predicted::decode(stream.data, &runs, vertex_count, dec);
     }
     stream.decode_ints::<i32>(dec)
 }
@@ -640,7 +638,15 @@ impl Decode<GeometryValues> for RawGeometry<'_> {
             dec,
         )?;
         let mut vertices = vertex_stream
-            .map(|stream| decode_vertex_stream(stream, &levels, vertex_offsets.is_some(), dec))
+            .map(|stream| {
+                decode_vertex_stream(
+                    stream,
+                    &vector_types,
+                    &levels,
+                    vertex_offsets.is_some(),
+                    dec,
+                )
+            })
             .transpose()?;
         let Levels {
             geometries: geometry_offsets,

@@ -6,7 +6,7 @@ use std::io::{self, Write};
 use usize_cast::IntoUsize as _;
 
 use crate::Decoder;
-use crate::decoder::RawStream;
+use crate::decoder::{LogicalEncoding, RawStream, VertexLogical};
 use crate::dump::model::{BlobInfo, DecodeHint, DumpTree, Region, RegionKind};
 
 /// How data-payload blobs are shown.
@@ -202,6 +202,9 @@ fn decode_blob(info: BlobInfo, data: &[u8], dec: &mut Decoder) -> String {
     // Bound memory/time per blob; the decoded values are dropped immediately.
     dec.reset_budget();
     let meta = info.meta;
+    if meta.encoding.logical == LogicalEncoding::Vertex(VertexLogical::Predicted) {
+        return "<predicted from the geometry topology, decoded with the layer>".into();
+    }
     match info.hint {
         DecodeHint::Presence => match RawStream::new(meta, data).decode_bitvec(dec) {
             Ok(bits) => fmt_bits(bits.len(), |i| bits[i]),
@@ -224,21 +227,12 @@ fn decode_blob(info: BlobInfo, data: &[u8], dec: &mut Decoder) -> String {
             }
             fmt_bits(n, |i| data[i / 8] >> (i % 8) & 1 == 1)
         }
-        #[cfg(feature = "unstable-v2")]
-        DecodeHint::Rans => match crate::codecs::rans::split(data, dec) {
-            Ok(parts) => fmt_rans(&parts),
-            Err(e) => format!("<undecodable: {e}>"),
-        },
         DecodeHint::Bool => fmt_res(RawStream::new(meta, data).decode_bools(dec)),
         DecodeHint::I32 => fmt_res(RawStream::new(meta, data).decode_ints::<i32>(dec)),
         DecodeHint::U32 | DecodeHint::GeometryType => {
             fmt_res(RawStream::new(meta, data).decode_ints::<u32>(dec))
         }
         DecodeHint::I64 => fmt_res(RawStream::new(meta, data).decode_ints::<i64>(dec)),
-        #[cfg(feature = "unstable-v2")]
-        DecodeHint::Alp(params) => {
-            fmt_res(RawStream::new(meta, data).decode_alp_codes(params, dec))
-        }
         DecodeHint::U64 => fmt_res(RawStream::new(meta, data).decode_ints::<u64>(dec)),
         DecodeHint::F32 => fmt_res(RawStream::new(meta, data).decode_floats::<f32>(dec)),
         DecodeHint::F64 => fmt_res(RawStream::new(meta, data).decode_floats::<f64>(dec)),
@@ -247,24 +241,6 @@ fn decode_blob(info: BlobInfo, data: &[u8], dec: &mut Decoder) -> String {
             Err(_) => format!("<{} binary bytes>", data.len()),
         },
     }
-}
-
-/// The parts of a rANS payload, e.g. `depth 1, tables 0:p3 2:p0, lanes 4+4+6+4 B, raw 2 B`.
-#[cfg(feature = "unstable-v2")]
-fn fmt_rans(parts: &crate::codecs::rans::Parts<'_>) -> String {
-    let tables: Vec<String> = parts
-        .precisions()
-        .enumerate()
-        .filter_map(|(ctx, p)| Some(format!("{ctx}:p{}", p?)))
-        .collect();
-    let lanes: Vec<String> = parts.lanes.iter().map(|l| l.len().to_string()).collect();
-    format!(
-        "depth {}, tables {}, lanes {} B, raw {} B",
-        parts.depth,
-        tables.join(" "),
-        lanes.join("+"),
-        parts.raw.len()
-    )
 }
 
 /// Render the first 96 of `n` presence bits as a `0`/`1` string.

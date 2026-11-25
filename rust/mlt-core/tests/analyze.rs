@@ -1,8 +1,8 @@
 //! Statistics and stream walks over the layers a tile parses into.
 
 use mlt_core::encoder::{
-    Codecs, Encoder, EncoderConfig, ExplicitEncoder, FloatEncoding, IntEncoder, Network, Profile,
-    StagedId, StagedLayer, StagedProperty, StrEncoding, VertexBufferType, WireVersion,
+    Codecs, Encoder, EncoderConfig, ExplicitEncoder, IntEncoder, Network, Profile, StagedId,
+    StagedLayer, StagedProperty, StrEncoding, VertexBufferType, WireVersion,
 };
 use mlt_core::geo_types::{Coord, Geometry, LineString, Point};
 use mlt_core::wire::{Analyze as _, StatType};
@@ -106,7 +106,6 @@ fn a_plain_fsst_string_column_walks_and_decodes() {
         force_stream: Box::new(|_| false),
         get_int_encoder: Box::new(|_| IntEncoder::varint()),
         get_str_encoding: Box::new(|_| StrEncoding::Fsst),
-        get_float_encoding: Box::new(|_| FloatEncoding::None),
     };
     let cfg = EncoderConfig::from_profile(Profile::Native(Network::Cellular4G))
         .with_wire_version(WireVersion::V02);

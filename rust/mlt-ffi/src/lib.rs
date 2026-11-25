@@ -209,29 +209,14 @@ mod ffi {
             self.0 = self.0.with_triangles_only(enabled);
         }
 
-        /// v2 only: allow integer and vertex streams to store the deltas of their deltas.
-        pub fn set_allow_delta2(&mut self, enabled: bool) {
-            self.0 = self.0.with_delta2(enabled);
+        /// v2 only: allow plain vertex streams to be stored as predicted vertices.
+        pub fn set_allow_predicted_vertices(&mut self, enabled: bool) {
+            self.0 = self.0.with_predicted_vertices(enabled);
         }
 
-        /// v2 only: allow float columns to store one code per value into a dictionary.
-        pub fn set_allow_float_dict(&mut self, enabled: bool) {
-            self.0 = self.0.with_float_dict(enabled);
-        }
-
-        /// v2 only: allow float columns to store each value as a decimal-scaled integer (ALP).
-        pub fn set_allow_float_alp(&mut self, enabled: bool) {
-            self.0 = self.0.with_float_alp(enabled);
-        }
-
-        /// v2 only: allow dictionary code streams to be bit-packed.
-        pub fn set_allow_packed_dict_codes(&mut self, enabled: bool) {
-            self.0 = self.0.with_packed_dict_codes(enabled);
-        }
-
-        /// v2 only: allow plain vertex streams to be rANS-coded.
-        pub fn set_allow_rans_vertices(&mut self, enabled: bool) {
-            self.0 = self.0.with_rans_vertices(enabled);
+        /// v2 only: allow presence bitfields and bool columns to be byte-RLE coded, an extension.
+        pub fn set_allow_presence_rle(&mut self, enabled: bool) {
+            self.0 = self.0.with_presence_rle(enabled);
         }
 
         /// v2 only: let a nested struct or map code its row shapes instead of per-field presence.

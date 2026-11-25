@@ -39,15 +39,9 @@ void MltEncoderOptions_set_wire_version(diplomat::capi::MltEncoderOptions* self,
 
 void MltEncoderOptions_set_allow_triangles_only(diplomat::capi::MltEncoderOptions* self, bool enabled);
 
-void MltEncoderOptions_set_allow_delta2(diplomat::capi::MltEncoderOptions* self, bool enabled);
+void MltEncoderOptions_set_allow_predicted_vertices(diplomat::capi::MltEncoderOptions* self, bool enabled);
 
-void MltEncoderOptions_set_allow_float_dict(diplomat::capi::MltEncoderOptions* self, bool enabled);
-
-void MltEncoderOptions_set_allow_float_alp(diplomat::capi::MltEncoderOptions* self, bool enabled);
-
-void MltEncoderOptions_set_allow_packed_dict_codes(diplomat::capi::MltEncoderOptions* self, bool enabled);
-
-void MltEncoderOptions_set_allow_rans_vertices(diplomat::capi::MltEncoderOptions* self, bool enabled);
+void MltEncoderOptions_set_allow_presence_rle(diplomat::capi::MltEncoderOptions* self, bool enabled);
 
 void MltEncoderOptions_set_allow_row_shapes(diplomat::capi::MltEncoderOptions* self, bool enabled);
 
@@ -98,24 +92,12 @@ inline void MltEncoderOptions::set_allow_triangles_only(bool enabled) {
     diplomat::capi::MltEncoderOptions_set_allow_triangles_only(this->AsFFI(), enabled);
 }
 
-inline void MltEncoderOptions::set_allow_delta2(bool enabled) {
-    diplomat::capi::MltEncoderOptions_set_allow_delta2(this->AsFFI(), enabled);
+inline void MltEncoderOptions::set_allow_predicted_vertices(bool enabled) {
+    diplomat::capi::MltEncoderOptions_set_allow_predicted_vertices(this->AsFFI(), enabled);
 }
 
-inline void MltEncoderOptions::set_allow_float_dict(bool enabled) {
-    diplomat::capi::MltEncoderOptions_set_allow_float_dict(this->AsFFI(), enabled);
-}
-
-inline void MltEncoderOptions::set_allow_float_alp(bool enabled) {
-    diplomat::capi::MltEncoderOptions_set_allow_float_alp(this->AsFFI(), enabled);
-}
-
-inline void MltEncoderOptions::set_allow_packed_dict_codes(bool enabled) {
-    diplomat::capi::MltEncoderOptions_set_allow_packed_dict_codes(this->AsFFI(), enabled);
-}
-
-inline void MltEncoderOptions::set_allow_rans_vertices(bool enabled) {
-    diplomat::capi::MltEncoderOptions_set_allow_rans_vertices(this->AsFFI(), enabled);
+inline void MltEncoderOptions::set_allow_presence_rle(bool enabled) {
+    diplomat::capi::MltEncoderOptions_set_allow_presence_rle(this->AsFFI(), enabled);
 }
 
 inline void MltEncoderOptions::set_allow_row_shapes(bool enabled) {

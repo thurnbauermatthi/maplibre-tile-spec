@@ -28,8 +28,6 @@ describe("annotateTile", () => {
     "0x02/nested_map_str.mlt",
     "0x02/nested_struct.mlt",
     "0x02/poly_hole.mlt",
-    "0x02/prop_f64_alp.mlt",
-    "0x02/props_sp.mlt",
     "0x02/props_str_dict.mlt",
   ])("leaves of %s partition the whole buffer", async (name) => {
     const tree = annotateTile(await fixture(name)).tree();
@@ -84,13 +82,6 @@ describe("decodeBlob", () => {
       values: [18446744073709551615n],
       truncatedFrom: null,
     });
-  });
-
-  it("hands Framed, Exception-Free ALP parameters across as a BigInt", async () => {
-    const tree = annotateTile(await fixture("0x02/prop_f64_alp.mlt")).tree();
-    const hint = tree.regions[blobIndex(tree, "alp")].blob?.hint;
-    expect(hint).toMatchSnapshot();
-    expect(typeof (hint as { base: bigint }).base).toBe("bigint");
   });
 
   it("decodes a string payload as text", async () => {

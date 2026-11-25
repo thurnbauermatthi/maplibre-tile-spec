@@ -8877,13 +8877,13 @@ public class mlt_ffi_h {
         }
     }
 
-    private static class MltEncoderOptions_set_allow_delta2 {
+    private static class MltEncoderOptions_set_allow_predicted_vertices {
         public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
             mlt_ffi_h.C_POINTER,
             mlt_ffi_h.C_BOOL
         );
 
-        public static final MemorySegment ADDR = mlt_ffi_h.findOrThrow("MltEncoderOptions_set_allow_delta2");
+        public static final MemorySegment ADDR = mlt_ffi_h.findOrThrow("MltEncoderOptions_set_allow_predicted_vertices");
 
         public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
     }
@@ -8891,43 +8891,43 @@ public class mlt_ffi_h {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * void MltEncoderOptions_set_allow_delta2(MltEncoderOptions *self, bool enabled)
+     * void MltEncoderOptions_set_allow_predicted_vertices(MltEncoderOptions *self, bool enabled)
      * }
      */
-    public static FunctionDescriptor MltEncoderOptions_set_allow_delta2$descriptor() {
-        return MltEncoderOptions_set_allow_delta2.DESC;
+    public static FunctionDescriptor MltEncoderOptions_set_allow_predicted_vertices$descriptor() {
+        return MltEncoderOptions_set_allow_predicted_vertices.DESC;
     }
 
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * void MltEncoderOptions_set_allow_delta2(MltEncoderOptions *self, bool enabled)
+     * void MltEncoderOptions_set_allow_predicted_vertices(MltEncoderOptions *self, bool enabled)
      * }
      */
-    public static MethodHandle MltEncoderOptions_set_allow_delta2$handle() {
-        return MltEncoderOptions_set_allow_delta2.HANDLE;
+    public static MethodHandle MltEncoderOptions_set_allow_predicted_vertices$handle() {
+        return MltEncoderOptions_set_allow_predicted_vertices.HANDLE;
     }
 
     /**
      * Address for:
      * {@snippet lang=c :
-     * void MltEncoderOptions_set_allow_delta2(MltEncoderOptions *self, bool enabled)
+     * void MltEncoderOptions_set_allow_predicted_vertices(MltEncoderOptions *self, bool enabled)
      * }
      */
-    public static MemorySegment MltEncoderOptions_set_allow_delta2$address() {
-        return MltEncoderOptions_set_allow_delta2.ADDR;
+    public static MemorySegment MltEncoderOptions_set_allow_predicted_vertices$address() {
+        return MltEncoderOptions_set_allow_predicted_vertices.ADDR;
     }
 
     /**
      * {@snippet lang=c :
-     * void MltEncoderOptions_set_allow_delta2(MltEncoderOptions *self, bool enabled)
+     * void MltEncoderOptions_set_allow_predicted_vertices(MltEncoderOptions *self, bool enabled)
      * }
      */
-    public static void MltEncoderOptions_set_allow_delta2(MemorySegment self, boolean enabled) {
-        var mh$ = MltEncoderOptions_set_allow_delta2.HANDLE;
+    public static void MltEncoderOptions_set_allow_predicted_vertices(MemorySegment self, boolean enabled) {
+        var mh$ = MltEncoderOptions_set_allow_predicted_vertices.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
-                traceDowncall("MltEncoderOptions_set_allow_delta2", self, enabled);
+                traceDowncall("MltEncoderOptions_set_allow_predicted_vertices", self, enabled);
             }
             mh$.invokeExact(self, enabled);
         } catch (Throwable ex$) {
@@ -8935,13 +8935,13 @@ public class mlt_ffi_h {
         }
     }
 
-    private static class MltEncoderOptions_set_allow_float_dict {
+    private static class MltEncoderOptions_set_allow_presence_rle {
         public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
             mlt_ffi_h.C_POINTER,
             mlt_ffi_h.C_BOOL
         );
 
-        public static final MemorySegment ADDR = mlt_ffi_h.findOrThrow("MltEncoderOptions_set_allow_float_dict");
+        public static final MemorySegment ADDR = mlt_ffi_h.findOrThrow("MltEncoderOptions_set_allow_presence_rle");
 
         public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
     }
@@ -8949,217 +8949,43 @@ public class mlt_ffi_h {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * void MltEncoderOptions_set_allow_float_dict(MltEncoderOptions *self, bool enabled)
+     * void MltEncoderOptions_set_allow_presence_rle(MltEncoderOptions *self, bool enabled)
      * }
      */
-    public static FunctionDescriptor MltEncoderOptions_set_allow_float_dict$descriptor() {
-        return MltEncoderOptions_set_allow_float_dict.DESC;
+    public static FunctionDescriptor MltEncoderOptions_set_allow_presence_rle$descriptor() {
+        return MltEncoderOptions_set_allow_presence_rle.DESC;
     }
 
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * void MltEncoderOptions_set_allow_float_dict(MltEncoderOptions *self, bool enabled)
+     * void MltEncoderOptions_set_allow_presence_rle(MltEncoderOptions *self, bool enabled)
      * }
      */
-    public static MethodHandle MltEncoderOptions_set_allow_float_dict$handle() {
-        return MltEncoderOptions_set_allow_float_dict.HANDLE;
+    public static MethodHandle MltEncoderOptions_set_allow_presence_rle$handle() {
+        return MltEncoderOptions_set_allow_presence_rle.HANDLE;
     }
 
     /**
      * Address for:
      * {@snippet lang=c :
-     * void MltEncoderOptions_set_allow_float_dict(MltEncoderOptions *self, bool enabled)
+     * void MltEncoderOptions_set_allow_presence_rle(MltEncoderOptions *self, bool enabled)
      * }
      */
-    public static MemorySegment MltEncoderOptions_set_allow_float_dict$address() {
-        return MltEncoderOptions_set_allow_float_dict.ADDR;
+    public static MemorySegment MltEncoderOptions_set_allow_presence_rle$address() {
+        return MltEncoderOptions_set_allow_presence_rle.ADDR;
     }
 
     /**
      * {@snippet lang=c :
-     * void MltEncoderOptions_set_allow_float_dict(MltEncoderOptions *self, bool enabled)
+     * void MltEncoderOptions_set_allow_presence_rle(MltEncoderOptions *self, bool enabled)
      * }
      */
-    public static void MltEncoderOptions_set_allow_float_dict(MemorySegment self, boolean enabled) {
-        var mh$ = MltEncoderOptions_set_allow_float_dict.HANDLE;
+    public static void MltEncoderOptions_set_allow_presence_rle(MemorySegment self, boolean enabled) {
+        var mh$ = MltEncoderOptions_set_allow_presence_rle.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
-                traceDowncall("MltEncoderOptions_set_allow_float_dict", self, enabled);
-            }
-            mh$.invokeExact(self, enabled);
-        } catch (Throwable ex$) {
-           throw new AssertionError("should not reach here", ex$);
-        }
-    }
-
-    private static class MltEncoderOptions_set_allow_float_alp {
-        public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
-            mlt_ffi_h.C_POINTER,
-            mlt_ffi_h.C_BOOL
-        );
-
-        public static final MemorySegment ADDR = mlt_ffi_h.findOrThrow("MltEncoderOptions_set_allow_float_alp");
-
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
-    }
-
-    /**
-     * Function descriptor for:
-     * {@snippet lang=c :
-     * void MltEncoderOptions_set_allow_float_alp(MltEncoderOptions *self, bool enabled)
-     * }
-     */
-    public static FunctionDescriptor MltEncoderOptions_set_allow_float_alp$descriptor() {
-        return MltEncoderOptions_set_allow_float_alp.DESC;
-    }
-
-    /**
-     * Downcall method handle for:
-     * {@snippet lang=c :
-     * void MltEncoderOptions_set_allow_float_alp(MltEncoderOptions *self, bool enabled)
-     * }
-     */
-    public static MethodHandle MltEncoderOptions_set_allow_float_alp$handle() {
-        return MltEncoderOptions_set_allow_float_alp.HANDLE;
-    }
-
-    /**
-     * Address for:
-     * {@snippet lang=c :
-     * void MltEncoderOptions_set_allow_float_alp(MltEncoderOptions *self, bool enabled)
-     * }
-     */
-    public static MemorySegment MltEncoderOptions_set_allow_float_alp$address() {
-        return MltEncoderOptions_set_allow_float_alp.ADDR;
-    }
-
-    /**
-     * {@snippet lang=c :
-     * void MltEncoderOptions_set_allow_float_alp(MltEncoderOptions *self, bool enabled)
-     * }
-     */
-    public static void MltEncoderOptions_set_allow_float_alp(MemorySegment self, boolean enabled) {
-        var mh$ = MltEncoderOptions_set_allow_float_alp.HANDLE;
-        try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("MltEncoderOptions_set_allow_float_alp", self, enabled);
-            }
-            mh$.invokeExact(self, enabled);
-        } catch (Throwable ex$) {
-           throw new AssertionError("should not reach here", ex$);
-        }
-    }
-
-    private static class MltEncoderOptions_set_allow_packed_dict_codes {
-        public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
-            mlt_ffi_h.C_POINTER,
-            mlt_ffi_h.C_BOOL
-        );
-
-        public static final MemorySegment ADDR = mlt_ffi_h.findOrThrow("MltEncoderOptions_set_allow_packed_dict_codes");
-
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
-    }
-
-    /**
-     * Function descriptor for:
-     * {@snippet lang=c :
-     * void MltEncoderOptions_set_allow_packed_dict_codes(MltEncoderOptions *self, bool enabled)
-     * }
-     */
-    public static FunctionDescriptor MltEncoderOptions_set_allow_packed_dict_codes$descriptor() {
-        return MltEncoderOptions_set_allow_packed_dict_codes.DESC;
-    }
-
-    /**
-     * Downcall method handle for:
-     * {@snippet lang=c :
-     * void MltEncoderOptions_set_allow_packed_dict_codes(MltEncoderOptions *self, bool enabled)
-     * }
-     */
-    public static MethodHandle MltEncoderOptions_set_allow_packed_dict_codes$handle() {
-        return MltEncoderOptions_set_allow_packed_dict_codes.HANDLE;
-    }
-
-    /**
-     * Address for:
-     * {@snippet lang=c :
-     * void MltEncoderOptions_set_allow_packed_dict_codes(MltEncoderOptions *self, bool enabled)
-     * }
-     */
-    public static MemorySegment MltEncoderOptions_set_allow_packed_dict_codes$address() {
-        return MltEncoderOptions_set_allow_packed_dict_codes.ADDR;
-    }
-
-    /**
-     * {@snippet lang=c :
-     * void MltEncoderOptions_set_allow_packed_dict_codes(MltEncoderOptions *self, bool enabled)
-     * }
-     */
-    public static void MltEncoderOptions_set_allow_packed_dict_codes(MemorySegment self, boolean enabled) {
-        var mh$ = MltEncoderOptions_set_allow_packed_dict_codes.HANDLE;
-        try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("MltEncoderOptions_set_allow_packed_dict_codes", self, enabled);
-            }
-            mh$.invokeExact(self, enabled);
-        } catch (Throwable ex$) {
-           throw new AssertionError("should not reach here", ex$);
-        }
-    }
-
-    private static class MltEncoderOptions_set_allow_rans_vertices {
-        public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
-            mlt_ffi_h.C_POINTER,
-            mlt_ffi_h.C_BOOL
-        );
-
-        public static final MemorySegment ADDR = mlt_ffi_h.findOrThrow("MltEncoderOptions_set_allow_rans_vertices");
-
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
-    }
-
-    /**
-     * Function descriptor for:
-     * {@snippet lang=c :
-     * void MltEncoderOptions_set_allow_rans_vertices(MltEncoderOptions *self, bool enabled)
-     * }
-     */
-    public static FunctionDescriptor MltEncoderOptions_set_allow_rans_vertices$descriptor() {
-        return MltEncoderOptions_set_allow_rans_vertices.DESC;
-    }
-
-    /**
-     * Downcall method handle for:
-     * {@snippet lang=c :
-     * void MltEncoderOptions_set_allow_rans_vertices(MltEncoderOptions *self, bool enabled)
-     * }
-     */
-    public static MethodHandle MltEncoderOptions_set_allow_rans_vertices$handle() {
-        return MltEncoderOptions_set_allow_rans_vertices.HANDLE;
-    }
-
-    /**
-     * Address for:
-     * {@snippet lang=c :
-     * void MltEncoderOptions_set_allow_rans_vertices(MltEncoderOptions *self, bool enabled)
-     * }
-     */
-    public static MemorySegment MltEncoderOptions_set_allow_rans_vertices$address() {
-        return MltEncoderOptions_set_allow_rans_vertices.ADDR;
-    }
-
-    /**
-     * {@snippet lang=c :
-     * void MltEncoderOptions_set_allow_rans_vertices(MltEncoderOptions *self, bool enabled)
-     * }
-     */
-    public static void MltEncoderOptions_set_allow_rans_vertices(MemorySegment self, boolean enabled) {
-        var mh$ = MltEncoderOptions_set_allow_rans_vertices.HANDLE;
-        try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("MltEncoderOptions_set_allow_rans_vertices", self, enabled);
+                traceDowncall("MltEncoderOptions_set_allow_presence_rle", self, enabled);
             }
             mh$.invokeExact(self, enabled);
         } catch (Throwable ex$) {

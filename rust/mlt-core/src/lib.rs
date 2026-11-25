@@ -86,7 +86,7 @@ pub mod wire {
     #[cfg(feature = "unstable-v2")]
     pub use crate::decoder::stream::model::XyzLogical;
     pub use crate::decoder::stream::model::{
-        Alp, BoolLogical, DictionaryType, FastPForKind, FloatLogical, IntEncoding, IntLogical,
+        BoolLogical, DictionaryType, FastPForKind, FloatLogical, IntEncoding, IntLogical,
         LengthType, LogicalEncoding, LogicalTechnique, Morton, OffsetType, PhysicalEncoding,
         RleLayout, RleMeta, StreamMeta, StreamType, ValueKind, VertexLogical,
     };

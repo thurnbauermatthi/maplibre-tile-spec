@@ -627,8 +627,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "bitmap": 40,
-        "sparse": 40
+        "bitmap": 40
       },
       "geometry": {
         "type": "Point",
@@ -659,8 +658,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "bitmap": 42,
-        "sparse": 42
+        "bitmap": 42
       },
       "geometry": {
         "type": "Point",
@@ -691,8 +689,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "bitmap": 44,
-        "sparse": 44
+        "bitmap": 44
       },
       "geometry": {
         "type": "Point",
@@ -723,8 +720,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "bitmap": 46,
-        "sparse": 46
+        "bitmap": 46
       },
       "geometry": {
         "type": "Point",
@@ -787,7 +783,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 50,
-        "runs": 50
+        "byte_rle": 50
       },
       "geometry": {
         "type": "Point",
@@ -803,7 +799,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 51
+        "byte_rle": 51
       },
       "geometry": {
         "type": "Point",
@@ -820,7 +816,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 52,
-        "runs": 52
+        "byte_rle": 52
       },
       "geometry": {
         "type": "Point",
@@ -836,7 +832,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 53
+        "byte_rle": 53
       },
       "geometry": {
         "type": "Point",
@@ -853,7 +849,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 54,
-        "runs": 54
+        "byte_rle": 54
       },
       "geometry": {
         "type": "Point",
@@ -869,7 +865,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 55
+        "byte_rle": 55
       },
       "geometry": {
         "type": "Point",
@@ -886,7 +882,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 56,
-        "runs": 56
+        "byte_rle": 56
       },
       "geometry": {
         "type": "Point",
@@ -902,7 +898,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 57
+        "byte_rle": 57
       },
       "geometry": {
         "type": "Point",
@@ -919,7 +915,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 58,
-        "runs": 58
+        "byte_rle": 58
       },
       "geometry": {
         "type": "Point",
@@ -935,7 +931,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 59
+        "byte_rle": 59
       },
       "geometry": {
         "type": "Point",
@@ -952,7 +948,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 60,
-        "runs": 60
+        "byte_rle": 60
       },
       "geometry": {
         "type": "Point",
@@ -968,7 +964,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 61
+        "byte_rle": 61
       },
       "geometry": {
         "type": "Point",
@@ -985,7 +981,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 62,
-        "runs": 62
+        "byte_rle": 62
       },
       "geometry": {
         "type": "Point",
@@ -1001,7 +997,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 63
+        "byte_rle": 63
       },
       "geometry": {
         "type": "Point",
@@ -1018,7 +1014,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 64,
-        "runs": 64
+        "byte_rle": 64
       },
       "geometry": {
         "type": "Point",
@@ -1034,7 +1030,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 65
+        "byte_rle": 65
       },
       "geometry": {
         "type": "Point",
@@ -1051,7 +1047,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 66,
-        "runs": 66
+        "byte_rle": 66
       },
       "geometry": {
         "type": "Point",
@@ -1067,7 +1063,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 67
+        "byte_rle": 67
       },
       "geometry": {
         "type": "Point",
@@ -1084,7 +1080,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 68,
-        "runs": 68
+        "byte_rle": 68
       },
       "geometry": {
         "type": "Point",
@@ -1100,7 +1096,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 69
+        "byte_rle": 69
       },
       "geometry": {
         "type": "Point",
@@ -1117,7 +1113,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 70,
-        "runs": 70
+        "byte_rle": 70
       },
       "geometry": {
         "type": "Point",
@@ -1133,7 +1129,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 71
+        "byte_rle": 71
       },
       "geometry": {
         "type": "Point",
@@ -1150,7 +1146,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 72,
-        "runs": 72
+        "byte_rle": 72
       },
       "geometry": {
         "type": "Point",
@@ -1166,7 +1162,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 73
+        "byte_rle": 73
       },
       "geometry": {
         "type": "Point",
@@ -1183,7 +1179,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 74,
-        "runs": 74
+        "byte_rle": 74
       },
       "geometry": {
         "type": "Point",
@@ -1199,7 +1195,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 75
+        "byte_rle": 75
       },
       "geometry": {
         "type": "Point",
@@ -1216,7 +1212,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 76,
-        "runs": 76
+        "byte_rle": 76
       },
       "geometry": {
         "type": "Point",
@@ -1232,7 +1228,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 77
+        "byte_rle": 77
       },
       "geometry": {
         "type": "Point",
@@ -1249,7 +1245,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 78,
-        "runs": 78
+        "byte_rle": 78
       },
       "geometry": {
         "type": "Point",
@@ -1265,7 +1261,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 79
+        "byte_rle": 79
       },
       "geometry": {
         "type": "Point",
@@ -1282,7 +1278,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 80,
-        "runs": 80
+        "byte_rle": 80
       },
       "geometry": {
         "type": "Point",
@@ -1298,7 +1294,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 81
+        "byte_rle": 81
       },
       "geometry": {
         "type": "Point",
@@ -1315,7 +1311,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 82,
-        "runs": 82
+        "byte_rle": 82
       },
       "geometry": {
         "type": "Point",
@@ -1331,7 +1327,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 83
+        "byte_rle": 83
       },
       "geometry": {
         "type": "Point",
@@ -1348,7 +1344,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 84,
-        "runs": 84
+        "byte_rle": 84
       },
       "geometry": {
         "type": "Point",
@@ -1364,7 +1360,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 85
+        "byte_rle": 85
       },
       "geometry": {
         "type": "Point",
@@ -1381,7 +1377,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 86,
-        "runs": 86
+        "byte_rle": 86
       },
       "geometry": {
         "type": "Point",
@@ -1397,7 +1393,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 87
+        "byte_rle": 87
       },
       "geometry": {
         "type": "Point",
@@ -1414,7 +1410,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 88,
-        "runs": 88
+        "byte_rle": 88
       },
       "geometry": {
         "type": "Point",
@@ -1430,7 +1426,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 89
+        "byte_rle": 89
       },
       "geometry": {
         "type": "Point",
@@ -1447,7 +1443,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 90,
-        "runs": 90
+        "byte_rle": 90
       },
       "geometry": {
         "type": "Point",
@@ -1463,7 +1459,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 91
+        "byte_rle": 91
       },
       "geometry": {
         "type": "Point",
@@ -1480,7 +1476,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 92,
-        "runs": 92
+        "byte_rle": 92
       },
       "geometry": {
         "type": "Point",
@@ -1496,7 +1492,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 93
+        "byte_rle": 93
       },
       "geometry": {
         "type": "Point",
@@ -1513,7 +1509,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 94,
-        "runs": 94
+        "byte_rle": 94
       },
       "geometry": {
         "type": "Point",
@@ -1529,7 +1525,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 95
+        "byte_rle": 95
       },
       "geometry": {
         "type": "Point",
@@ -1546,7 +1542,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 96,
-        "runs": 96
+        "byte_rle": 96
       },
       "geometry": {
         "type": "Point",
@@ -1562,7 +1558,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 97
+        "byte_rle": 97
       },
       "geometry": {
         "type": "Point",
@@ -1579,7 +1575,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 98,
-        "runs": 98
+        "byte_rle": 98
       },
       "geometry": {
         "type": "Point",
@@ -1595,7 +1591,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 99
+        "byte_rle": 99
       },
       "geometry": {
         "type": "Point",
@@ -1612,7 +1608,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 100,
-        "runs": 100
+        "byte_rle": 100
       },
       "geometry": {
         "type": "Point",
@@ -1628,7 +1624,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 101
+        "byte_rle": 101
       },
       "geometry": {
         "type": "Point",
@@ -1645,7 +1641,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 102,
-        "runs": 102
+        "byte_rle": 102
       },
       "geometry": {
         "type": "Point",
@@ -1661,7 +1657,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 103
+        "byte_rle": 103
       },
       "geometry": {
         "type": "Point",
@@ -1678,7 +1674,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 104,
-        "runs": 104
+        "byte_rle": 104
       },
       "geometry": {
         "type": "Point",
@@ -1694,7 +1690,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 105
+        "byte_rle": 105
       },
       "geometry": {
         "type": "Point",
@@ -1711,7 +1707,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 106,
-        "runs": 106
+        "byte_rle": 106
       },
       "geometry": {
         "type": "Point",
@@ -1727,7 +1723,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 107
+        "byte_rle": 107
       },
       "geometry": {
         "type": "Point",
@@ -1744,7 +1740,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 108,
-        "runs": 108
+        "byte_rle": 108
       },
       "geometry": {
         "type": "Point",
@@ -1760,7 +1756,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 109
+        "byte_rle": 109
       },
       "geometry": {
         "type": "Point",
@@ -1777,7 +1773,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 110,
-        "runs": 110
+        "byte_rle": 110
       },
       "geometry": {
         "type": "Point",
@@ -1793,7 +1789,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 111
+        "byte_rle": 111
       },
       "geometry": {
         "type": "Point",
@@ -1810,7 +1806,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 112,
-        "runs": 112
+        "byte_rle": 112
       },
       "geometry": {
         "type": "Point",
@@ -1826,7 +1822,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 113
+        "byte_rle": 113
       },
       "geometry": {
         "type": "Point",
@@ -1843,7 +1839,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 114,
-        "runs": 114
+        "byte_rle": 114
       },
       "geometry": {
         "type": "Point",
@@ -1859,7 +1855,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 115
+        "byte_rle": 115
       },
       "geometry": {
         "type": "Point",
@@ -1876,7 +1872,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 116,
-        "runs": 116
+        "byte_rle": 116
       },
       "geometry": {
         "type": "Point",
@@ -1892,7 +1888,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 117
+        "byte_rle": 117
       },
       "geometry": {
         "type": "Point",
@@ -1909,7 +1905,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 118,
-        "runs": 118
+        "byte_rle": 118
       },
       "geometry": {
         "type": "Point",
@@ -1925,7 +1921,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 119
+        "byte_rle": 119
       },
       "geometry": {
         "type": "Point",
@@ -1942,7 +1938,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 120,
-        "runs": 120
+        "byte_rle": 120
       },
       "geometry": {
         "type": "Point",
@@ -1958,7 +1954,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 121
+        "byte_rle": 121
       },
       "geometry": {
         "type": "Point",
@@ -1975,7 +1971,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 122,
-        "runs": 122
+        "byte_rle": 122
       },
       "geometry": {
         "type": "Point",
@@ -1991,7 +1987,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 123
+        "byte_rle": 123
       },
       "geometry": {
         "type": "Point",
@@ -2008,7 +2004,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 124,
-        "runs": 124
+        "byte_rle": 124
       },
       "geometry": {
         "type": "Point",
@@ -2024,7 +2020,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 125
+        "byte_rle": 125
       },
       "geometry": {
         "type": "Point",
@@ -2041,7 +2037,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 126,
-        "runs": 126
+        "byte_rle": 126
       },
       "geometry": {
         "type": "Point",
@@ -2057,7 +2053,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 127
+        "byte_rle": 127
       },
       "geometry": {
         "type": "Point",
@@ -2074,7 +2070,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 128,
-        "runs": 128
+        "byte_rle": 128
       },
       "geometry": {
         "type": "Point",
@@ -2090,7 +2086,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 129
+        "byte_rle": 129
       },
       "geometry": {
         "type": "Point",
@@ -2107,7 +2103,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 130,
-        "runs": 130
+        "byte_rle": 130
       },
       "geometry": {
         "type": "Point",
@@ -2123,7 +2119,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 131
+        "byte_rle": 131
       },
       "geometry": {
         "type": "Point",
@@ -2140,7 +2136,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 132,
-        "runs": 132
+        "byte_rle": 132
       },
       "geometry": {
         "type": "Point",
@@ -2156,7 +2152,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 133
+        "byte_rle": 133
       },
       "geometry": {
         "type": "Point",
@@ -2173,7 +2169,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 134,
-        "runs": 134
+        "byte_rle": 134
       },
       "geometry": {
         "type": "Point",
@@ -2189,7 +2185,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 135
+        "byte_rle": 135
       },
       "geometry": {
         "type": "Point",
@@ -2206,8 +2202,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 136,
-        "runs": 136,
-        "sparse": 136
+        "byte_rle": 136
       },
       "geometry": {
         "type": "Point",
@@ -2223,7 +2218,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 137
+        "byte_rle": 137
       },
       "geometry": {
         "type": "Point",
@@ -2240,8 +2235,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 138,
-        "runs": 138,
-        "sparse": 138
+        "byte_rle": 138
       },
       "geometry": {
         "type": "Point",
@@ -2257,7 +2251,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 139
+        "byte_rle": 139
       },
       "geometry": {
         "type": "Point",
@@ -2274,8 +2268,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 140,
-        "runs": 140,
-        "sparse": 140
+        "byte_rle": 140
       },
       "geometry": {
         "type": "Point",
@@ -2291,7 +2284,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 141
+        "byte_rle": 141
       },
       "geometry": {
         "type": "Point",
@@ -2308,8 +2301,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 142,
-        "runs": 142,
-        "sparse": 142
+        "byte_rle": 142
       },
       "geometry": {
         "type": "Point",
@@ -2325,7 +2317,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 143
+        "byte_rle": 143
       },
       "geometry": {
         "type": "Point",
@@ -2342,7 +2334,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 144,
-        "runs": 144
+        "byte_rle": 144
       },
       "geometry": {
         "type": "Point",
@@ -2358,7 +2350,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 145
+        "byte_rle": 145
       },
       "geometry": {
         "type": "Point",
@@ -2375,7 +2367,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 146,
-        "runs": 146
+        "byte_rle": 146
       },
       "geometry": {
         "type": "Point",
@@ -2391,7 +2383,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 147
+        "byte_rle": 147
       },
       "geometry": {
         "type": "Point",
@@ -2408,7 +2400,7 @@
         "_layer": "layer1",
         "always": 7,
         "bitmap": 148,
-        "runs": 148
+        "byte_rle": 148
       },
       "geometry": {
         "type": "Point",
@@ -2424,7 +2416,7 @@
         "_extent": 64,
         "_layer": "layer1",
         "always": 7,
-        "runs": 149
+        "byte_rle": 149
       },
       "geometry": {
         "type": "Point",

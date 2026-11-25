@@ -5,10 +5,9 @@ use std::panic::Location;
 use std::path::Path;
 
 use mlt_core::encoder::{
-    Codecs, ColumnKind, Encoder, EncoderConfig, ExplicitEncoder, FloatEncoding, IntEncoder,
-    Network, Presence, Profile, StagedId, StagedLayer, StagedMValue, StagedNested, StagedProperty,
-    StagedSharedDict, StrEncoding, StreamCtx, Tessellation, VertexBufferType, WireVersion,
-    wound_geometry,
+    Codecs, ColumnKind, Encoder, EncoderConfig, ExplicitEncoder, IntEncoder, Network, Presence,
+    Profile, StagedId, StagedLayer, StagedMValue, StagedNested, StagedProperty, StagedSharedDict,
+    StrEncoding, StreamCtx, Tessellation, VertexBufferType, WireVersion, wound_geometry,
 };
 use mlt_core::geo_types::{Coord, Geometry};
 use mlt_core::wire::{LengthType, OffsetType, StreamType};
@@ -44,11 +43,6 @@ enum PropConfig {
     Scalar(IntEncoder),
     /// A nested column whose root codes its rows as shape ids, `enc` pinning that one stream.
     ShapeIds(IntEncoder),
-    /// Float with its logical encoding pinned, `enc` carrying the dictionary codes or Framed, Exception-Free ALP integers.
-    Float {
-        enc: IntEncoder,
-        float_enc: FloatEncoding,
-    },
     /// String FSST encoding.
     StrFsst {
         sym_lengths: IntEncoder,
@@ -84,24 +78,9 @@ enum PropConfig {
 }
 
 impl PropConfig {
-    /// The pinned float encoding, or [`FloatEncoding::None`] for a column that is not a pinned float.
-    fn float_encoding(&self) -> FloatEncoding {
-        match self {
-            Self::Float { float_enc, .. } => *float_enc,
-            Self::Scalar(_)
-            | Self::ShapeIds(_)
-            | Self::StrFsst { .. }
-            | Self::StrFsstDict { .. }
-            | Self::StrDict { .. }
-            | Self::StrFrontDict { .. }
-            | Self::StrFsstFrontDict { .. }
-            | Self::SharedDict { .. } => FloatEncoding::None,
-        }
-    }
-
     fn str_encoding(&self) -> StrEncoding {
         match self {
-            Self::Scalar(_) | Self::ShapeIds(_) | Self::Float { .. } => StrEncoding::Plain,
+            Self::Scalar(_) | Self::ShapeIds(_) => StrEncoding::Plain,
             Self::StrFsst { .. } => StrEncoding::Fsst,
             Self::StrFsstDict { .. } => StrEncoding::FsstDict,
             Self::StrDict { .. } => StrEncoding::Dict,
@@ -117,7 +96,7 @@ impl PropConfig {
         use OffsetType as OT;
         use StreamType as ST;
         match self {
-            Self::Scalar(e) | Self::Float { enc: e, .. } => *e,
+            Self::Scalar(e) => *e,
             Self::ShapeIds(e) => match ctx.stream_type {
                 ST::Data(_) if ctx.subname.is_empty() => *e,
                 ST::Present | ST::Data(_) | ST::Offset(_) | ST::Length(_) => IntEncoder::varint(),
@@ -320,11 +299,11 @@ impl Layer {
         self.no_v1()
     }
 
-    /// rANS-code the vertices over the layer's runs, which only v2 can do.
+    /// Store the vertices as predicted vertices over the layer's runs, which only v2 can do.
     #[must_use]
     #[track_caller]
-    pub fn rans_vertices(mut self) -> Self {
-        self.vertex_buffer_type = VertexBufferType::Rans;
+    pub fn predicted_vertices(mut self) -> Self {
+        self.vertex_buffer_type = VertexBufferType::Predicted;
         self.no_v1()
     }
 
@@ -390,20 +369,6 @@ impl Layer {
     #[must_use]
     pub fn add_prop(mut self, enc: IntEncoder, prop: StagedProperty) -> Self {
         self.props.push((prop, PropConfig::Scalar(enc)));
-        self
-    }
-
-    /// Add a float property whose logical encoding is pinned rather than costed.
-    /// Only v2 can express anything but [`FloatEncoding::None`], so v1 writes the values raw.
-    #[must_use]
-    pub fn add_prop_float(
-        mut self,
-        enc: IntEncoder,
-        float_enc: FloatEncoding,
-        prop: StagedProperty,
-    ) -> Self {
-        self.props
-            .push((prop, PropConfig::Float { enc, float_enc }));
         self
     }
 
@@ -511,25 +476,6 @@ impl Layer {
             Location::caller()
         );
         self.m_values.push((m_value, PropConfig::Scalar(enc)));
-        self
-    }
-
-    /// Add a vertex-scoped float column whose logical encoding is pinned rather than costed.
-    #[must_use]
-    #[track_caller]
-    pub fn add_m_value_float(
-        mut self,
-        enc: IntEncoder,
-        float_enc: FloatEncoding,
-        m_value: StagedMValue,
-    ) -> Self {
-        assert!(
-            !self.versions().contains(&WireVersion::V01),
-            "v1 does not support m-values. Called from {}",
-            Location::caller()
-        );
-        self.m_values
-            .push((m_value, PropConfig::Float { enc, float_enc }));
         self
     }
 
@@ -831,21 +777,11 @@ impl Layer {
                         .map_or_else(IntEncoder::varint, |c| c.int_enc_for_stream_ctx(ctx)),
                 })
             },
-            get_str_encoding: {
-                let prop_map = prop_map.clone();
-                Box::new(move |name: &str| {
-                    prop_map
-                        .get(name)
-                        .map_or(StrEncoding::Plain, PropConfig::str_encoding)
-                })
-            },
-            get_float_encoding: {
-                Box::new(move |name: &str| {
-                    prop_map
-                        .get(name)
-                        .map_or(FloatEncoding::None, PropConfig::float_encoding)
-                })
-            },
+            get_str_encoding: Box::new(move |name: &str| {
+                prop_map
+                    .get(name)
+                    .map_or(StrEncoding::Plain, PropConfig::str_encoding)
+            }),
         };
 
         let mut codecs = Codecs::default();

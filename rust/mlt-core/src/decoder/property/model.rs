@@ -11,8 +11,6 @@ use bitvec::slice::BitSlice;
 use bitvec::vec::BitVec;
 use enum_dispatch::enum_dispatch;
 
-#[cfg(feature = "unstable-v2")]
-use crate::decoder::Alp;
 use crate::decoder::RawStream;
 use crate::utils::PresentValues;
 use crate::{DecodeState, Lazy, PropKind};
@@ -67,19 +65,6 @@ impl<'a> RawFloats<'a> {
 pub enum RawFloatsEncoding<'a> {
     /// One data stream, its own logical encoding saying how to read it.
     Single(RawStream<'a>),
-    /// Codes first, then the distinct values they index.
-    ///
-    /// Requires the `unstable-v2` feature.
-    #[cfg(feature = "unstable-v2")]
-    Dictionary {
-        codes: RawStream<'a>,
-        dictionary: RawStream<'a>,
-    },
-    /// Integers scaled by a power of ten, in one stream, with the parameters in its header.
-    ///
-    /// Requires the `unstable-v2` feature.
-    #[cfg(feature = "unstable-v2")]
-    Alp { params: Alp, data: RawStream<'a> },
 }
 
 /// Raw string column as read directly from the tile.

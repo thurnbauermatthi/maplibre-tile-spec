@@ -198,14 +198,15 @@ enum TessellateMode {
 /// Encoder defaults for one kind of tile consumer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum Profile {
-    /// `MapLibre GL JS`: online, `--no-fastpfor --no-fsst`, which lose bytes after gzip, brotli and zstd
+    /// Tiles served with gzip, brotli or zstd: `--no-fastpfor --no-fsst`, every choice ranked by deflated size,
+    /// and under MLT version 2 predicted vertices. With `--network offline`, the uncompressed profile instead
     Web,
     /// `MapLibre Native`: `--tessellate=auto`
     Native,
-    /// The fewest stored bytes: `--sort auto`, which reorders features, and under MLT version 2 `--delta2 --rans-vertices`
+    /// The fewest stored bytes: `--sort auto`, which reorders features
     #[value(name = "min_size", alias = "min-size")]
     MinSize,
-    /// Small binary diffs between releases: `--no-fsst --no-shared-dict`, and under MLT version 2 `--delta2`
+    /// Small binary diffs between releases: `--no-fsst --no-shared-dict`
     Diffable,
     /// The quickest encode: no triangles, sorts, `FSST`, `FastPFOR` or shared dictionaries, so tiles come out larger
     #[value(name = "fast_encoding", alias = "fast-encoding")]
@@ -442,29 +443,10 @@ pub struct ConvertArgs {
 /// Encoder options that only MLT version 2 can express, which the encoder ignores under v1.
 #[derive(Args, Default, PartialEq, Eq)]
 #[command(next_help_heading = "MLT version 2 options (need `--mlt-version 2`)")]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "each bool is an independent CLI on/off flag, not a state machine"
-)]
 struct V2EncoderArgs {
-    /// Disable Framed, Exception-Free ALP float encoding, storing floats as decimal-scaled integers
-    #[clap(long)]
-    no_alp: bool,
-    /// Disable float dictionary encoding
-    #[clap(long)]
-    no_float_dict: bool,
-    /// Disable bit-packed dictionary codes, leaving a varint each
-    #[clap(long)]
-    no_bitpacking: bool,
     /// With `--tessellate`, store only the triangles of an all-polygon layer, without its outlines
     #[clap(long)]
     triangles_only: bool,
-    /// Let integer and vertex streams store the deltas of their deltas when that is shorter
-    #[clap(long)]
-    delta2: bool,
-    /// Store vertex streams rANS-coded when that beats componentwise delta
-    #[clap(long)]
-    rans_vertices: bool,
 }
 
 /// Whether `path` names a `GeoJSON` file, which `convert` tiles rather than re-encodes.
@@ -568,17 +550,7 @@ impl ConvertArgs {
         if self.no_fsst {
             encoder = encoder.with_fsst(false);
         }
-        if v2.delta2 {
-            encoder = encoder.with_delta2(true);
-        }
-        if v2.rans_vertices {
-            encoder = encoder.with_rans_vertices(true);
-        }
-        Ok(encoder
-            .with_float_alp(!v2.no_alp)
-            .with_float_dict(!v2.no_float_dict)
-            .with_packed_dict_codes(!v2.no_bitpacking)
-            .with_triangles_only(v2.triangles_only))
+        Ok(encoder.with_triangles_only(v2.triangles_only))
     }
 }
 
@@ -1454,19 +1426,12 @@ mod tests {
     }
 
     #[test]
-    fn delta2_switches_second_order_deltas_on() {
-        let encoder = parse_args(&["--mlt-version", "2", "--delta2", "src", "dst"])
+    fn the_web_profile_predicts_vertices_under_v2() {
+        let encoder = parse_args(&["--profile", "web", "--mlt-version", "2", "src", "dst"])
             .encoder()
             .unwrap();
-        assert!(encoder.allow_delta2());
-    }
-
-    #[test]
-    fn rans_vertices_switches_rans_vertices_on() {
-        let encoder = parse_args(&["--mlt-version", "2", "--rans-vertices", "src", "dst"])
-            .encoder()
-            .unwrap();
-        assert!(encoder.allow_rans_vertices());
+        assert!(encoder.allow_predicted_vertices());
+        assert!(encoder.compressed_selection());
     }
 
     #[test]
@@ -1535,23 +1500,17 @@ mod tests {
 
     #[test]
     fn a_v2_only_encoder_option_without_v2_is_rejected() {
-        for flags in [
-            &["--no-alp"][..],
-            &["--no-float-dict"],
-            &["--no-bitpacking"],
-            &["--tessellate", "--triangles-only"],
-            &["--delta2"],
-            &["--rans-vertices"],
-        ] {
-            let mut argv = flags.to_vec();
-            argv.extend(["src", "dst"]);
-            let err = convert(&parse_args(&argv)).unwrap_err();
-            assert_eq!(
-                err.to_string(),
-                "the MLT version 2 options in --help only apply to MLT version 2, so they need --mlt-version 2",
-                "{flags:?}"
-            );
-        }
+        let err = convert(&parse_args(&[
+            "--tessellate",
+            "--triangles-only",
+            "src",
+            "dst",
+        ]))
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "the MLT version 2 options in --help only apply to MLT version 2, so they need --mlt-version 2",
+        );
     }
 
     #[test]
@@ -1677,8 +1636,20 @@ mod tests {
     }
 
     #[test]
-    fn an_omt_archive_decodes_back_to_its_input_through_v2_delta2() {
-        verify_omt_conversion(&["--mlt-version", "2", "--delta2"]);
+    fn an_omt_archive_decodes_back_to_its_input_through_the_v2_web_profile() {
+        verify_omt_conversion(&["--mlt-version", "2", "--profile", "web"]);
+    }
+
+    #[test]
+    fn an_omt_archive_decodes_back_to_its_input_through_the_v2_uncompressed_profile() {
+        verify_omt_conversion(&[
+            "--mlt-version",
+            "2",
+            "--profile",
+            "web",
+            "--network",
+            "offline",
+        ]);
     }
 
     fn field_config(toml: &str) -> TempPath {

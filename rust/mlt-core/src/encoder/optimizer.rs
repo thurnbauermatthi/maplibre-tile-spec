@@ -179,12 +179,12 @@ pub(crate) fn encode_layer(source: &impl LayerSource, cfg: EncoderConfig) -> Mlt
             // Even at the size of the layer without them, triangles that spare no client CPU would lose.
             if let Some(best) = &best
                 && tessellate != best.tessellated
-                && price.at(best.enc.total_len()) >= best.cost
+                && price.at(best.enc.ranked_len()) >= best.cost
             {
                 continue;
             }
             enc = layer.encode_into(enc, &mut codecs)?;
-            let cost = price.at(enc.total_len());
+            let cost = price.at(enc.ranked_len());
             if best.as_ref().is_none_or(|best| cost < best.cost) {
                 let enc = enc.preserve_results();
                 best = Some(Best {

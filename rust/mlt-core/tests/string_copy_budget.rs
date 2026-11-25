@@ -3,8 +3,8 @@
 use std::path::Path;
 
 use mlt_core::encoder::{
-    Codecs, Encoder, EncoderConfig, ExplicitEncoder, FloatEncoding, IntEncoder, Network, Profile,
-    StagedId, StagedLayer, StagedProperty, StrEncoding, VertexBufferType,
+    Codecs, Encoder, EncoderConfig, ExplicitEncoder, IntEncoder, Network, Profile, StagedId,
+    StagedLayer, StagedProperty, StrEncoding, VertexBufferType,
 };
 use mlt_core::geo_types::{Geometry, Point};
 use mlt_core::{
@@ -67,7 +67,6 @@ fn a_dictionary_entry_named_past_the_budget_is_refused() {
         force_stream: Box::new(|_| false),
         get_int_encoder: Box::new(|_| IntEncoder::varint()),
         get_str_encoding: Box::new(|_| StrEncoding::Dict),
-        get_float_encoding: Box::new(|_| FloatEncoding::None),
     };
     let cfg = EncoderConfig::from_profile(Profile::Native(Network::Cellular4G));
     let bytes = staged

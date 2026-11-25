@@ -182,12 +182,8 @@ fn stream_token(stream: StreamType) -> &'static str {
 fn physical_token(physical: PhysicalEncoding) -> Option<&'static str> {
     let token = match physical {
         PhysicalEncoding::None => return None,
-        PhysicalEncoding::FastPFor(kind) => match kind {
-            FastPForKind::Block256Be => "fastpfor[256be]",
-            FastPForKind::Block128Le => "fastpfor[128le]",
-        },
+        PhysicalEncoding::FastPFor(FastPForKind::Block256Be) => "fastpfor[256be]",
         PhysicalEncoding::VarInt => "varint",
-        PhysicalEncoding::BitPacked => "bit-packed",
     };
     Some(token)
 }
@@ -197,17 +193,11 @@ fn logical_token(logical: StatLogicalCodec) -> Option<&'static str> {
     Some(match logical {
         StatLogicalCodec::None => return None,
         StatLogicalCodec::Delta => "delta",
-        StatLogicalCodec::Delta2 => "delta2",
         StatLogicalCodec::DeltaRle => "delta-rle",
         StatLogicalCodec::Rle => "rle",
         StatLogicalCodec::ComponentwiseDelta => "componentwise-delta",
-        StatLogicalCodec::ComponentwiseDelta2 => "componentwise-delta2",
         StatLogicalCodec::MortonDelta => "morton-delta",
-        StatLogicalCodec::Dict => "dict",
-        StatLogicalCodec::Alp => "alp",
-        StatLogicalCodec::Runs => "runs",
-        StatLogicalCodec::Sparse => "sparse",
-        StatLogicalCodec::Rans => "rans",
+        StatLogicalCodec::Predicted => "predicted",
     })
 }
 
@@ -966,17 +956,11 @@ type StreamStat = (StreamType, PhysicalEncoding, StatLogicalCodec);
 pub enum StatLogicalCodec {
     None,
     Delta,
-    Delta2,
     DeltaRle,
     ComponentwiseDelta,
-    ComponentwiseDelta2,
     Rle,
     MortonDelta,
-    Dict,
-    Alp,
-    Rans,
-    Runs,
-    Sparse,
+    Predicted,
 }
 
 impl From<LogicalEncoding> for StatLogicalCodec {
@@ -992,13 +976,7 @@ impl From<LogicalEncoding> for StatLogicalCodec {
             LE::Vertex(VertexLogical::ComponentwiseDelta) => Self::ComponentwiseDelta,
             LE::Int(IntLogical::Rle(_)) | LE::Bool(BoolLogical::ByteRle(_)) => Self::Rle,
             LE::Vertex(VertexLogical::MortonDelta(_)) => Self::MortonDelta,
-            LE::Float(FloatLogical::Dict) => Self::Dict,
-            LE::Float(FloatLogical::Alp(_)) => Self::Alp,
-            LE::Int(IntLogical::Delta2) => Self::Delta2,
-            LE::Vertex(VertexLogical::ComponentwiseDelta2) => Self::ComponentwiseDelta2,
-            LE::Vertex(VertexLogical::Rans) => Self::Rans,
-            LE::Bool(BoolLogical::Runs) => Self::Runs,
-            LE::Bool(BoolLogical::Sparse) => Self::Sparse,
+            LE::Vertex(VertexLogical::Predicted) => Self::Predicted,
             // z is the extension bit, not a codec: report the codec the triples use,
             // and leave the step to the `zStep` facet.
             LE::Vertex(VertexLogical::Xyz(_, xyz)) => match xyz {

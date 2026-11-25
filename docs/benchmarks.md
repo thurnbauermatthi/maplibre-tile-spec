@@ -66,11 +66,6 @@ Pick a dataset below; the [method](#method) applies to all of them.
     | `--no-fsst` | +0.7% | +0.8% | -2% | -3% |
     | `--sort none` | +0.2% | +0.2% | +1% | 0% |
     | `--sort all` | -0.4% | -0.4% | +1% | +1% |
-    | `--no-alp` | - | +0.0% | - | 0% |
-    | `--no-float-dict` | - | +0.0% | - | 0% |
-    | `--no-bitpacking` | - | +0.7% | - | +1% |
-    | `--delta2` | - | -0.5% | - | 0% |
-    | `--rans-vertices` | - | -5.4% | - | +16% |
     | `--tessellate=always` | +21.9% | +24.9% | +27% | +14% |
     | `--tessellate=always --triangles-only` | - | +23.2% | - | +10% |
 
@@ -121,11 +116,6 @@ Pick a dataset below; the [method](#method) applies to all of them.
     | `--no-fsst` | +0.2% | +0.2% | 0% | -1% |
     | `--sort none` | +0.1% | +0.1% | +1% | +1% |
     | `--sort all` | -0.1% | -0.1% | +1% | +1% |
-    | `--no-alp` | - | +0.1% | - | 0% |
-    | `--no-float-dict` | - | +0.0% | - | 0% |
-    | `--no-bitpacking` | - | +0.3% | - | 0% |
-    | `--delta2` | - | -0.6% | - | +1% |
-    | `--rans-vertices` | - | -5.3% | - | +88% |
     | `--tessellate=always` | +32.4% | +35.8% | +145% | +68% |
     | `--tessellate=always --triangles-only` | - | +33.5% | - | +59% |
 
@@ -138,25 +128,20 @@ Pick a dataset below; the [method](#method) applies to all of them.
     Here is our current recommendation for this workflow (with a few caveats, read table below)
 
     ```terminal
-    mlt convert --mlt-version 2 --delta2 --sort none --no-shared-dict --no-fsst --fields ./string_to_field_config.toml new.mbtiles new.mlt2.mbtiles
+    mlt convert --mlt-version 2 --sort none --no-shared-dict --no-fsst --fields ./string_to_field_config.toml new.mbtiles new.mlt2.mbtiles
     mbtiles diff --strict --patch-type bin-diff-raw old.mlt2.mbtiles new.mlt2.mbtiles old_to_new.bindiff
     ```
 
     | Option | For binary diffs | Rationale |
     |---|---|---|
-    | `--mlt-version 2` | Use | Smaller tiles, less metadata, supports `--delta2`. |
-    | `--delta2` | Use | Densely sampled lines have tiny second differences, and an edit changes only the deltas next to it. |
+    | `--mlt-version 2` | Use | Smaller tiles, less metadata. |
     | `--sort none` | Likely use | Features keep their source order, so an edited feature does not move others. *Good/bad for bsdiff may be different based on data.* |
     | `--no-shared-dict` | Use | One new string would renumber the dictionary shared by several columns. |
     | `--no-fsst` | Use | FSST trains its symbol table on the column, so one changed string can change every compressed string. |
     | `--fields` | Use | Numbers parsed out of strings are smaller as typed columns, and an edit changes only the values it touches. |
-    | `--no-alp` | Depends | ALP stores a column as offsets from its minimum at one decimal scale, so a new minimum or a finer value changes every offset. Without it, floats are stored raw or dictionary-coded, and raw floats change only where a value changes. |
-    | `--no-float-dict` | Depends | The float dictionary numbers values in order of first appearance, so a new or removed value renumbers every value after it. *Good/bad for bsdiff may be different based on data.* |
     | `--no-fastpfor` | Likely Avoid | The patch stays the same, and the tiles grow. *Good/bad for bsdiff may be different based on data.* |
-    | `--rans-vertices` | Avoid | Every byte of the rANS stream after the first changed symbol differs, which roughly doubles the patch. |
     | `--tile-compression gzip` | Avoid | Deflate output differs after the first change. If wanted, compress the patch instead. |
     | `--tessellate` | Avoid | Adds triangles that change with every polygon edit, and `--tessellate=always` grows the tiles by a fifth or more. |
-    | `--no-bitpacking` | Avoid | Only string dictionary indexes are bit-packed. |
 
 ## Method
 

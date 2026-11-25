@@ -39,9 +39,9 @@ use usize_cast::IntoUsize as _;
 use crate::codecs::presence_coding::{self, PresenceCoding};
 use crate::codecs::varint::parse_varint;
 use crate::decoder::{
-    Alp, AlpScale, BoolLogical, DataType02, DictLayout, DictionaryType, FastPForKind, FloatLogical,
-    IntEncoding, IntLogical, LengthType, LogicalEncoding, Morton, OffsetType, PhysicalEncoding,
-    RawStream, RleMeta, StreamMeta, StreamType, VertexLogical, XyzLogical,
+    BoolLogical, DataType02, DictLayout, DictionaryType, FastPForKind, FloatLogical, IntEncoding,
+    IntLogical, LengthType, LogicalEncoding, Morton, OffsetType, PhysicalEncoding, RawStream,
+    RleMeta, StreamMeta, StreamType, VertexLogical, XyzLogical,
 };
 use crate::errors::{AsMltError as _, fail_if_invalid_stream_size};
 use crate::tile::ZAxis;
@@ -82,15 +82,9 @@ pub(crate) enum Logical {
     Rle,
     DeltaRle,
     Morton,
-    Alp,
-    Dict,
     FrontCoded,
-    BitPacked,
-    Delta2,
-    CwDelta2,
-    Rans,
-    Runs,
-    Sparse,
+    ByteRle,
+    Predicted,
 }
 
 /// How a string column lays its streams out, named by the extension bits of its leading stream.
@@ -173,25 +167,11 @@ impl Family {
     const fn members(self) -> &'static [Logical] {
         use Logical as L;
         match self {
-            Self::Int(_) | Self::Str(_) => &[
-                L::None,
-                L::Delta,
-                L::Rle,
-                L::DeltaRle,
-                L::BitPacked,
-                L::Delta2,
-            ],
-            Self::Bool => &[L::None, L::Runs, L::Sparse],
-            Self::Float(_) => &[L::None, L::Rle, L::Alp, L::Dict],
-            Self::Vertex => &[
-                L::None,
-                L::Delta,
-                L::CwDelta,
-                L::Morton,
-                L::CwDelta2,
-                L::Rans,
-            ],
+            Self::Int(_) | Self::Str(_) => &[L::None, L::Delta, L::Rle, L::DeltaRle],
+            Self::Bool => &[L::None, L::ByteRle],
+            Self::Float(_) => &[L::None],
             Self::Bytes => &[L::None, L::FrontCoded],
+            Self::Vertex => &[L::None, L::Delta, L::CwDelta, L::Morton, L::Predicted],
         }
     }
 
@@ -244,8 +224,6 @@ pub(crate) enum StreamCtx02 {
     /// A scalar column's data stream, typed by the column's data type.
     /// A string column's streams have their own contexts, since their roles follow its [`StrLayout`].
     Property(DataType02),
-    /// The dictionary a column's codes index into, following its codes stream, of the column's own type.
-    PropertyDictionary(DataType02),
     /// A string column's leading stream, of one entry per present value.
     StrData(StrLayout),
     /// The lengths of the distinct values a string column stores once.
@@ -279,7 +257,7 @@ impl StreamCtx02 {
     pub(crate) fn family(self) -> Family {
         use DataType02 as D;
         match self {
-            Self::Property(typ) | Self::PropertyDictionary(typ) => match typ {
+            Self::Property(typ) => match typ {
                 D::Bool => Family::Bool,
                 D::F32 => Family::Float(WordWidth::W32),
                 D::F64 => Family::Float(WordWidth::W64),
@@ -309,7 +287,6 @@ impl StreamCtx02 {
     pub(crate) fn stream_type(self) -> StreamType {
         match self {
             Self::Property(_) | Self::NestedShapeIds => StreamType::Data(DictionaryType::None),
-            Self::PropertyDictionary(_) => StreamType::Data(DictionaryType::Single),
             Self::StrData(StrLayout::Plain) | Self::GeomTypes => {
                 StreamType::Length(LengthType::VarBinary)
             }
@@ -372,7 +349,7 @@ pub(crate) fn write_blob_meta<W: io::Write>(
 pub(crate) enum PhysicalInt {
     NoneWithLen = 0b0000_0100,
     VarInt = 0b0000_1000,
-    FastPFor128 = 0b0000_1100,
+    FastPFor = 0b0000_1100,
 }
 
 /// Physical field of a stream of untransformed integer words, the one integer stream that may leave its byte length unwritten.
@@ -411,10 +388,6 @@ pub(crate) enum LogicalInt {
     Rle,
     /// As [`Self::Rle`], over zigzag deltas.
     DeltaRle,
-    /// Every value in the same number of bits, so the physical field is reserved.
-    /// The width leads the payload, since it is a property of the values rather than of the format.
-    BitPacked,
-    Delta2(PhysicalInt),
 }
 
 /// Logical encoding of a bool column's data stream, which is the way a presence bitfield is coded.
@@ -422,30 +395,9 @@ pub(crate) enum LogicalInt {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LogicalBool(pub(crate) PresenceCoding);
 
-/// Logical encoding of a float column's data stream.
+/// Logical encoding of a float column's data stream: fixed-width little-endian values, one per element.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LogicalFloat {
-    /// Fixed-width little-endian values, one per element.
-    None(PhysicalBits),
-    /// Framed, Exception-Free ALP.
-    /// The physical field codes the scaled integers, not the column's element layout.
-    // TODO(v2): extension bit 1 = an exception count varint and exception stream follow.
-    Alp(PhysicalInt),
-    /// One code per element, then the dictionary of distinct values as a second stream.
-    /// The physical field codes the codes, not the values.
-    Dict(PhysicalInt),
-}
-
-/// Logical encoding of an opaque byte blob.
-/// A blob's count is its byte length, so every member writes one and none carries a physical field.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LogicalBytes {
-    /// The bytes as they are.
-    None,
-    /// A dictionary's entries with their shared prefixes removed, so the blob holds only suffixes.
-    /// The preceding lengths stream holds the shared-prefix lengths, then the suffix lengths.
-    FrontCoded,
-}
+pub(crate) struct LogicalFloat(PhysicalBits);
 
 /// Logical encoding of a geometry vertex stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -453,12 +405,11 @@ pub(crate) enum LogicalVertex {
     None(RawInt),
     Delta(PhysicalInt),
     CwDelta(PhysicalInt),
-    CwDelta2(PhysicalInt),
     /// Deltas between the Morton codes of a sorted vertex dictionary.
     /// The grid the codes are laid on follows the byte length as two varints.
     Morton(PhysicalInt),
-    /// rANS over componentwise deltas, so the physical field is reserved.
-    Rans,
+    /// Predicted vertices, whose payload defines its own layout, so the physical field is reserved.
+    Predicted,
 }
 
 /// Logical encoding of an `(x, y, z)` vertex stream, which has no Morton member.
@@ -480,7 +431,9 @@ pub(crate) enum Encoding02 {
     Xyz(LogicalXyz),
     /// A string column's leading stream, coded as an integer one, plus the layout its extension bits name.
     Str(LogicalInt, StrLayout),
-    Bytes(LogicalBytes),
+    /// An opaque byte blob, arranged as the dictionary layout names.
+    /// A blob's count is its byte length, so it always writes one and carries no physical field.
+    Bytes(DictLayout),
 }
 
 /// Read the physical field as an integer codec, for an encoding that always writes its byte length.
@@ -546,20 +499,11 @@ fn logical_int(family: Family, enc_byte: u8, logical: Logical) -> MltResult<Logi
             no_physical(enc_byte)?;
             LogicalInt::DeltaRle
         }
-        Logical::BitPacked => {
-            no_physical(enc_byte)?;
-            LogicalInt::BitPacked
-        }
-        Logical::Delta2 => LogicalInt::Delta2(physical_int(enc_byte)?),
         Logical::CwDelta
         | Logical::Morton
-        | Logical::Alp
-        | Logical::Dict
         | Logical::FrontCoded
-        | Logical::CwDelta2
-        | Logical::Rans
-        | Logical::Runs
-        | Logical::Sparse => unreachable_member(family, logical),
+        | Logical::ByteRle
+        | Logical::Predicted => unreachable_member(family, logical),
     })
 }
 
@@ -590,75 +534,51 @@ impl Encoding02 {
             Family::Bytes => {
                 // A blob's count is its byte length, so every blob writes one.
                 require_physical(enc_byte, PhysicalBits::WithLen as u8)?;
-                Self::Bytes(match logical {
-                    Logical::None => LogicalBytes::None,
-                    Logical::FrontCoded => LogicalBytes::FrontCoded,
+                match logical {
+                    Logical::None => Self::Bytes(DictLayout::Plain),
+                    Logical::FrontCoded => Self::Bytes(DictLayout::FrontCoded),
                     Logical::Delta
                     | Logical::CwDelta
                     | Logical::Rle
                     | Logical::DeltaRle
                     | Logical::Morton
-                    | Logical::Alp
-                    | Logical::Dict
-                    | Logical::BitPacked
-                    | Logical::Delta2
-                    | Logical::CwDelta2
-                    | Logical::Rans
-                    | Logical::Runs
-                    | Logical::Sparse => unreachable_member(family, logical),
-                })
+                    | Logical::ByteRle
+                    | Logical::Predicted => unreachable_member(family, logical),
+                }
             }
             Family::Bool => Self::Bool(match logical {
                 Logical::None => logical_bool(enc_byte, PresenceCoding::Bitmap)?,
-                Logical::Runs => logical_bool(enc_byte, PresenceCoding::Runs)?,
-                Logical::Sparse => logical_bool(enc_byte, PresenceCoding::Sparse)?,
-                Logical::Rle
-                | Logical::Delta
-                | Logical::CwDelta
-                | Logical::DeltaRle
-                | Logical::Morton
-                | Logical::Alp
-                | Logical::Dict
-                | Logical::FrontCoded
-                | Logical::BitPacked
-                | Logical::Delta2
-                | Logical::CwDelta2
-                | Logical::Rans => unreachable_member(family, logical),
-            }),
-            Family::Float(_) => Self::Float(match logical {
-                Logical::None => LogicalFloat::None(physical_bits(enc_byte)?),
-                Logical::Rle => return Err(MltError::ParsingEncodingByte(enc_byte)),
-                Logical::Alp => LogicalFloat::Alp(physical_int(enc_byte)?),
-                Logical::Dict => LogicalFloat::Dict(physical_int(enc_byte)?),
+                Logical::ByteRle => logical_bool(enc_byte, PresenceCoding::ByteRle)?,
                 Logical::Delta
                 | Logical::CwDelta
+                | Logical::Rle
                 | Logical::DeltaRle
                 | Logical::Morton
                 | Logical::FrontCoded
-                | Logical::BitPacked
-                | Logical::Delta2
-                | Logical::CwDelta2
-                | Logical::Rans
-                | Logical::Runs
-                | Logical::Sparse => unreachable_member(family, logical),
+                | Logical::Predicted => unreachable_member(family, logical),
             }),
+            Family::Float(_) => match logical {
+                Logical::None => Self::Float(LogicalFloat(physical_bits(enc_byte)?)),
+                Logical::Delta
+                | Logical::CwDelta
+                | Logical::Rle
+                | Logical::DeltaRle
+                | Logical::Morton
+                | Logical::FrontCoded
+                | Logical::ByteRle
+                | Logical::Predicted => unreachable_member(family, logical),
+            },
             Family::Vertex if enc_byte & EXTENSION_MASK == XYZ => Self::Xyz(match logical {
                 Logical::None => LogicalXyz::None(raw_int(enc_byte)?),
                 Logical::Delta => LogicalXyz::Delta(physical_int(enc_byte)?),
                 Logical::CwDelta => LogicalXyz::CwDelta(physical_int(enc_byte)?),
-                // A Morton code spans only x and y, and second-order deltas and rANS are defined over pairs.
-                Logical::Morton | Logical::CwDelta2 | Logical::Rans => {
+                // A Morton code spans only x and y, and predictions are defined over pairs.
+                Logical::Morton | Logical::Predicted => {
                     return Err(MltError::ParsingEncodingByte(enc_byte));
                 }
-                Logical::Rle
-                | Logical::DeltaRle
-                | Logical::Alp
-                | Logical::Dict
-                | Logical::FrontCoded
-                | Logical::BitPacked
-                | Logical::Delta2
-                | Logical::Runs
-                | Logical::Sparse => unreachable_member(family, logical),
+                Logical::Rle | Logical::DeltaRle | Logical::FrontCoded | Logical::ByteRle => {
+                    unreachable_member(family, logical)
+                }
             }),
             Family::Vertex => Self::Vertex(match logical {
                 _ if enc_byte & EXTENSION_MASK != 0 => {
@@ -667,21 +587,14 @@ impl Encoding02 {
                 Logical::None => LogicalVertex::None(raw_int(enc_byte)?),
                 Logical::Delta => LogicalVertex::Delta(physical_int(enc_byte)?),
                 Logical::CwDelta => LogicalVertex::CwDelta(physical_int(enc_byte)?),
-                Logical::CwDelta2 => LogicalVertex::CwDelta2(physical_int(enc_byte)?),
                 Logical::Morton => LogicalVertex::Morton(physical_int(enc_byte)?),
-                Logical::Rans => {
+                Logical::Predicted => {
                     no_physical(enc_byte)?;
-                    LogicalVertex::Rans
+                    LogicalVertex::Predicted
                 }
-                Logical::Rle
-                | Logical::DeltaRle
-                | Logical::Alp
-                | Logical::Dict
-                | Logical::FrontCoded
-                | Logical::BitPacked
-                | Logical::Delta2
-                | Logical::Runs
-                | Logical::Sparse => unreachable_member(family, logical),
+                Logical::Rle | Logical::DeltaRle | Logical::FrontCoded | Logical::ByteRle => {
+                    unreachable_member(family, logical)
+                }
             }),
         })
     }
@@ -690,10 +603,10 @@ impl Encoding02 {
     fn logical(self) -> Logical {
         match self {
             Self::Str(logical, _) => Self::Int(logical).logical(),
-            Self::Bytes(LogicalBytes::None)
+            Self::Bytes(DictLayout::Plain)
             | Self::Int(LogicalInt::None(_))
             | Self::Bool(LogicalBool(PresenceCoding::Bitmap))
-            | Self::Float(LogicalFloat::None(_))
+            | Self::Float(_)
             | Self::Vertex(LogicalVertex::None(_))
             | Self::Xyz(LogicalXyz::None(_)) => Logical::None,
             Self::Int(LogicalInt::Delta(_))
@@ -702,18 +615,12 @@ impl Encoding02 {
             Self::Vertex(LogicalVertex::CwDelta(_)) | Self::Xyz(LogicalXyz::CwDelta(_)) => {
                 Logical::CwDelta
             }
-            Self::Int(LogicalInt::Delta2(_)) => Logical::Delta2,
-            Self::Vertex(LogicalVertex::CwDelta2(_)) => Logical::CwDelta2,
-            Self::Bool(LogicalBool(PresenceCoding::Runs)) => Logical::Runs,
-            Self::Bool(LogicalBool(PresenceCoding::Sparse)) => Logical::Sparse,
+            Self::Bool(LogicalBool(PresenceCoding::ByteRle)) => Logical::ByteRle,
             Self::Int(LogicalInt::Rle) => Logical::Rle,
             Self::Int(LogicalInt::DeltaRle) => Logical::DeltaRle,
-            Self::Int(LogicalInt::BitPacked) => Logical::BitPacked,
             Self::Vertex(LogicalVertex::Morton(_)) => Logical::Morton,
-            Self::Vertex(LogicalVertex::Rans) => Logical::Rans,
-            Self::Float(LogicalFloat::Alp(_)) => Logical::Alp,
-            Self::Float(LogicalFloat::Dict(_)) => Logical::Dict,
-            Self::Bytes(LogicalBytes::FrontCoded) => Logical::FrontCoded,
+            Self::Vertex(LogicalVertex::Predicted) => Logical::Predicted,
+            Self::Bytes(DictLayout::FrontCoded) => Logical::FrontCoded,
         }
     }
 
@@ -724,23 +631,16 @@ impl Encoding02 {
             Self::Int(LogicalInt::None(raw))
             | Self::Vertex(LogicalVertex::None(raw))
             | Self::Xyz(LogicalXyz::None(raw)) => raw.label(),
-            Self::Int(LogicalInt::Delta(p) | LogicalInt::Delta2(p))
-            | Self::Float(LogicalFloat::Dict(p) | LogicalFloat::Alp(p))
+            Self::Int(LogicalInt::Delta(p))
             | Self::Vertex(
-                LogicalVertex::Delta(p)
-                | LogicalVertex::CwDelta(p)
-                | LogicalVertex::CwDelta2(p)
-                | LogicalVertex::Morton(p),
+                LogicalVertex::Delta(p) | LogicalVertex::CwDelta(p) | LogicalVertex::Morton(p),
             )
             | Self::Xyz(LogicalXyz::Delta(p) | LogicalXyz::CwDelta(p)) => p.into(),
-            Self::Float(LogicalFloat::None(p)) => p.into(),
-            Self::Bytes(LogicalBytes::None | LogicalBytes::FrontCoded) => {
-                PhysicalBits::WithLen.into()
-            }
-            Self::Int(LogicalInt::BitPacked) => "BitPacked",
+            Self::Float(LogicalFloat(p)) => p.into(),
+            Self::Bytes(_) => PhysicalBits::WithLen.into(),
             Self::Int(LogicalInt::Rle | LogicalInt::DeltaRle)
             | Self::Bool(_)
-            | Self::Vertex(LogicalVertex::Rans) => "implied",
+            | Self::Vertex(LogicalVertex::Predicted) => "implied",
         }
     }
 
@@ -752,8 +652,7 @@ impl Encoding02 {
                 LogicalVertex::None(_)
                 | LogicalVertex::Delta(_)
                 | LogicalVertex::CwDelta(_)
-                | LogicalVertex::CwDelta2(_)
-                | LogicalVertex::Rans,
+                | LogicalVertex::Predicted,
             ) => 2,
             Self::Int(_)
             | Self::Bool(_)
@@ -772,11 +671,9 @@ impl Encoding02 {
             Self::Int(LogicalInt::None(raw))
             | Self::Vertex(LogicalVertex::None(raw))
             | Self::Xyz(LogicalXyz::None(raw)) => raw == RawInt::NoneNoLen,
-            Self::Float(LogicalFloat::None(p)) => p == PhysicalBits::NoLen,
+            Self::Float(LogicalFloat(p)) => p == PhysicalBits::NoLen,
             Self::Bool(_) => true,
-            Self::Int(_) | Self::Float(_) | Self::Vertex(_) | Self::Xyz(_) | Self::Bytes(_) => {
-                false
-            }
+            Self::Int(_) | Self::Vertex(_) | Self::Xyz(_) | Self::Bytes(_) => false,
         }
     }
 
@@ -794,7 +691,7 @@ impl Encoding02 {
             Self::Str(logical, _) => return Self::Int(logical).to_model(input, num_values),
             // Front coding restructures the dictionary, not the blob's words, so the
             // stream itself still reads as flat bytes and the layout is applied by the caller.
-            Self::Bytes(LogicalBytes::None | LogicalBytes::FrontCoded) => IntEncoding::new(
+            Self::Bytes(_) => IntEncoding::new(
                 LogicalEncoding::Int(IntLogical::None),
                 PhysicalEncoding::None,
             ),
@@ -815,15 +712,8 @@ impl Encoding02 {
                 LogicalEncoding::Vertex(VertexLogical::ComponentwiseDelta),
                 flat_int(p),
             ),
-            Self::Int(LogicalInt::Delta2(p)) => {
-                IntEncoding::new(LogicalEncoding::Int(IntLogical::Delta2), flat_int(p))
-            }
-            Self::Vertex(LogicalVertex::CwDelta2(p)) => IntEncoding::new(
-                LogicalEncoding::Vertex(VertexLogical::ComponentwiseDelta2),
-                flat_int(p),
-            ),
-            Self::Vertex(LogicalVertex::Rans) => IntEncoding::new(
-                LogicalEncoding::Vertex(VertexLogical::Rans),
+            Self::Vertex(LogicalVertex::Predicted) => IntEncoding::new(
+                LogicalEncoding::Vertex(VertexLogical::Predicted),
                 PhysicalEncoding::None,
             ),
             Self::Int(LogicalInt::Rle) => IntEncoding::new(
@@ -834,32 +724,14 @@ impl Encoding02 {
                 LogicalEncoding::Int(IntLogical::DeltaRle(rle())),
                 PhysicalEncoding::VarInt,
             ),
-            // Bit packing is a physical layout, so it reads back as one over untransformed values.
-            Self::Int(LogicalInt::BitPacked) => IntEncoding::new(
-                LogicalEncoding::Int(IntLogical::None),
-                PhysicalEncoding::BitPacked,
-            ),
             Self::Bool(LogicalBool(coding)) => IntEncoding::new(
-                LogicalEncoding::Bool(BoolLogical::from(coding)),
+                LogicalEncoding::Bool(coding.logical(num_values)),
                 PhysicalEncoding::None,
             ),
-            Self::Float(LogicalFloat::None(_)) => IntEncoding::new(
+            Self::Float(_) => IntEncoding::new(
                 LogicalEncoding::Float(FloatLogical::None),
                 PhysicalEncoding::None,
             ),
-            Self::Float(LogicalFloat::Alp(p)) => {
-                let (after, scale) = parse_u8(input)?;
-                let (after, base) = parse_varint::<i64>(after)?;
-                rest = after;
-                let scale = AlpScale::from_byte(scale)?;
-                IntEncoding::new(
-                    LogicalEncoding::Float(FloatLogical::Alp(Alp { scale, base })),
-                    flat_int(p),
-                )
-            }
-            Self::Float(LogicalFloat::Dict(p)) => {
-                IntEncoding::new(LogicalEncoding::Float(FloatLogical::Dict), flat_int(p))
-            }
             Self::Xyz(xyz) => {
                 let (after, step) = parse_u8(input)?;
                 rest = after;
@@ -897,7 +769,7 @@ fn flat_int(physical: PhysicalInt) -> PhysicalEncoding {
     match physical {
         PhysicalInt::NoneWithLen => PhysicalEncoding::None,
         PhysicalInt::VarInt => PhysicalEncoding::VarInt,
-        PhysicalInt::FastPFor128 => PhysicalEncoding::FastPFor(FastPForKind::Block128Le),
+        PhysicalInt::FastPFor => PhysicalEncoding::FastPFor(FastPForKind::Block256Be),
     }
 }
 
@@ -911,25 +783,12 @@ fn flat_raw_int(raw: RawInt) -> PhysicalEncoding {
 }
 
 /// The physical field bits for a stream of integers, whatever the column's own type is.
-fn physical_int_field(physical: PhysicalEncoding) -> MltResult<u8> {
-    Ok(match physical {
+fn physical_int_field(physical: PhysicalEncoding) -> u8 {
+    match physical {
         PhysicalEncoding::None => PhysicalInt::NoneWithLen as u8,
         PhysicalEncoding::VarInt => PhysicalInt::VarInt as u8,
-        PhysicalEncoding::FastPFor(FastPForKind::Block128Le) => PhysicalInt::FastPFor128 as u8,
-        PhysicalEncoding::FastPFor(FastPForKind::Block256Be) => {
-            return Err(MltError::UnsupportedPhysicalEncodingForType(
-                physical,
-                "v2, whose FastPFor streams are 128-value little-endian blocks",
-            ));
-        }
-        // Bit packing is named by the logical field, which `wire_fields` takes before this.
-        PhysicalEncoding::BitPacked => {
-            return Err(MltError::UnsupportedPhysicalEncodingForType(
-                physical,
-                "a v2 physical field, which has no code for bit packing",
-            ));
-        }
-    })
+        PhysicalEncoding::FastPFor(FastPForKind::Block256Be) => PhysicalInt::FastPFor as u8,
+    }
 }
 
 /// The header fields an encoding is written as, the reverse of [`Encoding02::to_model`].
@@ -965,7 +824,7 @@ fn wire_fields(
                     "v2 float and blob streams store their elements as they are",
                 ))
             }
-            _ => physical_int_field(encoding.physical),
+            _ => Ok(physical_int_field(encoding.physical)),
         }
     };
 
@@ -974,17 +833,6 @@ fn wire_fields(
         physical_bits,
         writes_length: true,
     };
-
-    // Bit packing has a logical code of its own, since the physical field has no spare pattern.
-    if encoding.physical == PhysicalEncoding::BitPacked {
-        if encoding.logical != LE::Int(IL::None) {
-            return Err(MltError::UnsupportedLogicalEncoding(
-                encoding.logical,
-                "v2 bit packing, which stores values as they are",
-            ));
-        }
-        return Ok(with_length(Logical::BitPacked, 0));
-    }
 
     Ok(match encoding.logical {
         LE::Int(IL::None)
@@ -1008,15 +856,13 @@ fn wire_fields(
         LE::Vertex(VL::ComponentwiseDelta | VL::Xyz(_, XyzLogical::ComponentwiseDelta)) => {
             with_length(Logical::CwDelta, physical(encoding)?)
         }
-        LE::Int(IL::Delta2) => with_length(Logical::Delta2, physical(encoding)?),
-        LE::Vertex(VL::ComponentwiseDelta2) => with_length(Logical::CwDelta2, physical(encoding)?),
-        LE::Vertex(VL::Rans) => {
+        LE::Vertex(VL::Predicted) => {
             if encoding.physical != PhysicalEncoding::None {
                 return Err(MltError::UnsupportedPhysicalEncoding(
-                    "v2 rANS, which defines its own payload",
+                    "v2 predicted vertices, which define their own payload",
                 ));
             }
-            with_length(Logical::Rans, 0)
+            with_length(Logical::Predicted, 0)
         }
         LE::Int(IL::Rle(rle) | IL::DeltaRle(rle)) => {
             if !matches!(rle, RleMeta::Interleaved { .. }) {
@@ -1038,10 +884,7 @@ fn wire_fields(
             // The physical encoding is implied, so the field stays zero.
             with_length(logical, 0)
         }
-        // Codes and scaled integers are integer streams, whatever the column's type is.
-        LE::Float(FL::Dict) => with_length(Logical::Dict, physical_int_field(encoding.physical)?),
-        LE::Float(FL::Alp(_)) => with_length(Logical::Alp, physical_int_field(encoding.physical)?),
-        LE::Bool(coding @ (BL::None | BL::Runs | BL::Sparse)) => {
+        LE::Bool(coding @ (BL::None | BL::ByteRle(RleMeta::Interleaved { .. }))) => {
             if encoding.physical != PhysicalEncoding::None {
                 return Err(MltError::UnsupportedPhysicalEncoding(
                     "v2 bool streams, which every coding delimits itself",
@@ -1049,23 +892,23 @@ fn wire_fields(
             }
             WireFields {
                 logical: match coding {
-                    BL::Runs => Logical::Runs,
-                    BL::Sparse => Logical::Sparse,
-                    BL::None | BL::ByteRle(_) => Logical::None,
+                    BL::ByteRle(_) => Logical::ByteRle,
+                    BL::None => Logical::None,
                 },
                 physical_bits: NO_LEN,
                 writes_length: false,
             }
         }
-        LE::Bool(BL::ByteRle(_)) => {
+        // v1 counts byte-RLE runs in the stream header; a v2 bool stream delimits itself.
+        LE::Bool(BL::ByteRle(RleMeta::Split { .. })) => {
             return Err(MltError::UnsupportedLogicalEncoding(
                 encoding.logical,
-                "v2, whose bool columns have no byte-RLE",
+                "a v2 bool stream, whose byte-RLE carries no run count",
             ));
         }
         // v2 stores Morton codes only as a sorted dictionary, whose deltas are always the shorter form.
         LE::Vertex(VL::MortonDelta(_)) => {
-            with_length(Logical::Morton, physical_int_field(encoding.physical)?)
+            with_length(Logical::Morton, physical_int_field(encoding.physical))
         }
     })
 }
@@ -1169,7 +1012,7 @@ pub(crate) fn write_stream_meta<W: io::Write>(
     // derives by scanning the pairs to `byte_length`).
     let num_values = match meta.encoding.logical {
         LE::Int(IntLogical::Rle(rle) | IntLogical::DeltaRle(rle)) => rle.num_rle_values(),
-        LE::Int(IntLogical::None | IntLogical::Delta | IntLogical::Delta2)
+        LE::Int(IntLogical::None | IntLogical::Delta)
         | LE::Bool(_)
         | LE::Float(_)
         | LE::Vertex(_) => meta.num_values,
@@ -1199,10 +1042,6 @@ pub(crate) fn write_stream_meta<W: io::Write>(
     if fields.writes_length {
         writer.write_varint(byte_length)?;
     }
-    if let LE::Float(FloatLogical::Alp(alp)) = meta.encoding.logical {
-        writer.write_u8(alp.scale.to_byte())?;
-        writer.write_varint(alp.base)?;
-    }
     if let LE::Vertex(VertexLogical::Xyz(step, _)) = meta.encoding.logical {
         writer.write_u8(step.code())?;
     }
@@ -1217,27 +1056,6 @@ pub(crate) fn write_stream_meta<W: io::Write>(
 /// A byte that does not parse in `family` omits nothing, since parsing the stream already failed on it.
 pub(crate) fn omits_byte_length(family: Family, enc_byte: u8) -> bool {
     Encoding02::parse(family, enc_byte).is_ok_and(Encoding02::omits_byte_length)
-}
-
-/// The byte a shared bitfield leads with: a `Bool`-family encoding byte, which needs no count.
-pub(crate) fn shared_coding_byte(coding: PresenceCoding) -> u8 {
-    (coding as u8) << LOGICAL_SHIFT
-}
-
-/// The coding a shared bitfield's leading byte names, or [`None`] if it names none.
-pub(crate) fn shared_coding(byte: u8) -> Option<PresenceCoding> {
-    if byte & HAS_EXPLICIT_COUNT != 0 {
-        return None;
-    }
-    bool_coding(byte)
-}
-
-/// The coding a `Bool`-family encoding byte names, or [`None`] if it names none.
-pub(crate) fn bool_coding(enc_byte: u8) -> Option<PresenceCoding> {
-    match Encoding02::parse(Family::Bool, enc_byte) {
-        Ok(Encoding02::Bool(LogicalBool(coding))) => Some(coding),
-        _ => None,
-    }
 }
 
 /// Name an encoding byte's logical and physical fields in `family`'s terms, for tooling that annotates a byte.
@@ -1287,7 +1105,7 @@ mod tests {
 
     use PhysicalEncoding as PE;
 
-    const FPF128: PE = PE::FastPFor(FastPForKind::Block128Le);
+    const FPF: PE = PE::FastPFor(FastPForKind::Block256Be);
 
     fn meta(logical: LogicalEncoding, physical: PhysicalEncoding, num: u32) -> StreamMeta {
         let stream_type = StreamType::Data(DictionaryType::None);
@@ -1327,16 +1145,13 @@ mod tests {
     #[case::int_rle(INT_FAMILY, Logical::Rle, 0b010)]
     #[case::int_delta_rle(INT_FAMILY, Logical::DeltaRle, 0b011)]
     #[case::bool_none(Family::Bool, Logical::None, 0b000)]
-    #[case::bool_runs(Family::Bool, Logical::Runs, 0b001)]
-    #[case::bool_sparse(Family::Bool, Logical::Sparse, 0b010)]
+    #[case::bool_byte_rle(Family::Bool, Logical::ByteRle, 0b001)]
     #[case::float_none(FLOAT_FAMILY, Logical::None, 0b000)]
-    #[case::float_rle(FLOAT_FAMILY, Logical::Rle, 0b001)]
-    #[case::float_alp(FLOAT_FAMILY, Logical::Alp, 0b010)]
-    #[case::float_dict(FLOAT_FAMILY, Logical::Dict, 0b011)]
     #[case::vertex_none(Family::Vertex, Logical::None, 0b000)]
     #[case::vertex_delta(Family::Vertex, Logical::Delta, 0b001)]
     #[case::vertex_cw_delta(Family::Vertex, Logical::CwDelta, 0b010)]
     #[case::vertex_morton(Family::Vertex, Logical::Morton, 0b011)]
+    #[case::vertex_predicted(Family::Vertex, Logical::Predicted, 0b100)]
     #[case::str_none(Family::Str(StrLayout::Dict), Logical::None, 0b000)]
     #[case::str_delta_rle(Family::Str(StrLayout::Dict), Logical::DeltaRle, 0b011)]
     #[case::bytes_none(Family::Bytes, Logical::None, 0b000)]
@@ -1397,7 +1212,6 @@ mod tests {
     #[case::f64(DataType02::F64, FLOAT_FAMILY)]
     fn column_data_type_picks_its_family(#[case] data: DataType02, #[case] family: Family) {
         assert_eq!(StreamCtx02::Property(data).family(), family);
-        assert_eq!(StreamCtx02::PropertyDictionary(data).family(), family);
     }
 
     #[rstest]
@@ -1462,7 +1276,7 @@ mod tests {
     #[case::varint_explicit(int(IntLogical::None, PE::VarInt, 5), 9, INT_FAMILY, 0b1000_1000)]
     #[case::raw_implicit(int(IntLogical::None, PE::None, 5), 5, INT_FAMILY, 0b0000_0000)]
     #[case::raw_delta(int(IntLogical::Delta, PE::None, 5), 5, INT_FAMILY, 0b0001_0100)]
-    #[case::fastpfor128(int(IntLogical::None, FPF128, 5), 5, INT_FAMILY, 0b0000_1100)]
+    #[case::fastpfor(int(IntLogical::None, FPF, 5), 5, INT_FAMILY, 0b0000_1100)]
     #[case::delta_varint(int(IntLogical::Delta, PE::VarInt, 5), 5, INT_FAMILY, 0b0001_1000)]
     #[case::rle_implicit(
         int(IntLogical::Rle(rle(5)), PE::VarInt, 5),
@@ -1496,23 +1310,11 @@ mod tests {
         Family::Vertex,
         0b0010_1001
     )]
-    #[case::float_dict_codes_varint(
-        float(FloatLogical::Dict, PE::VarInt, 5),
-        5,
-        FLOAT_FAMILY,
-        0b0011_1000
-    )]
-    #[case::float_dict_codes_raw(
-        float(FloatLogical::Dict, PE::None, 5),
-        5,
-        FLOAT_FAMILY,
-        0b0011_0100
-    )]
-    #[case::float_alp_integers(
-        float(FloatLogical::Alp(Alp::new(3, 1, 0).unwrap()), PE::VarInt, 5),
-        5,
-        FLOAT_FAMILY,
-        0b0010_1000
+    #[case::predicted_vertices(
+        vertex(VertexLogical::Predicted, PE::None, 6),
+        6,
+        Family::Vertex,
+        0b0100_0000
     )]
     #[case::cw_delta_vertices_explicit(
         vertex(VertexLogical::ComponentwiseDelta, PE::VarInt, 8),
@@ -1582,38 +1384,26 @@ mod tests {
     #[case::varint(int(IntLogical::None, PE::VarInt, 5), 5, INT)]
     #[case::varint_explicit(int(IntLogical::None, PE::VarInt, 7), 5, INT)]
     #[case::raw_delta(int(IntLogical::Delta, PE::None, 5), 5, INT)]
-    #[case::fastpfor128(int(IntLogical::None, FPF128, 5), 5, INT)]
-    #[case::delta_fastpfor128(int(IntLogical::Delta, FPF128, 5), 5, INT)]
-    #[case::float_dict_codes_fastpfor128(float(FloatLogical::Dict, FPF128, 5), 5, FLOAT)]
+    #[case::fastpfor(int(IntLogical::None, FPF, 5), 5, INT)]
+    #[case::delta_fastpfor(int(IntLogical::Delta, FPF, 5), 5, INT)]
     #[case::delta(int(IntLogical::Delta, PE::VarInt, 5), 5, INT)]
     #[case::rle(int(IntLogical::Rle(rle(5)), PE::VarInt, 5), 5, INT)]
     #[case::delta_rle(int(IntLogical::DeltaRle(rle(9)), PE::VarInt, 9), 5, INT)]
-    #[case::float_dict_codes_varint(float(FloatLogical::Dict, PE::VarInt, 5), 5, FLOAT)]
-    #[case::float_dict_codes_raw(float(FloatLogical::Dict, PE::None, 5), 5, FLOAT)]
-    #[case::float_alp(
-        float(FloatLogical::Alp(Alp::new(6, 2, -7).unwrap()), PE::VarInt, 5),
-        5,
-        FLOAT
-    )]
-    #[case::float_alp_explicit_count(
-        float(FloatLogical::Alp(Alp::new(0, 0, 0).unwrap()), PE::VarInt, 7),
-        5,
-        FLOAT
-    )]
+    #[case::predicted_vertices(vertex(VertexLogical::Predicted, PE::None, 10), 5, VERTEX)]
     #[case::cw_delta_vertices(vertex(VertexLogical::ComponentwiseDelta, PE::VarInt, 10), 5, VERTEX)]
     #[case::morton_dict(
         vertex(VertexLogical::MortonDelta(Morton::new(16, 4096).unwrap()), PE::VarInt, 10),
         5,
         VERTEX
     )]
-    #[case::morton_dict_fastpfor128(
-        vertex(VertexLogical::MortonDelta(Morton::new(0, 0).unwrap()), FPF128, 5),
+    #[case::morton_dict_fastpfor(
+        vertex(VertexLogical::MortonDelta(Morton::new(0, 0).unwrap()), FPF, 5),
         5,
         VERTEX
     )]
     #[case::xyz_none(vertex(xyz(XyzLogical::None), PE::VarInt, 9), 9, VERTEX)]
     #[case::xyz_delta(vertex(xyz(XyzLogical::Delta), PE::VarInt, 9), 9, VERTEX)]
-    #[case::xyz_cw_delta(vertex(xyz(XyzLogical::ComponentwiseDelta), FPF128, 9), 5, VERTEX)]
+    #[case::xyz_cw_delta(vertex(xyz(XyzLogical::ComponentwiseDelta), FPF, 9), 5, VERTEX)]
     #[case::xyz_finest_step(
         vertex(VertexLogical::Xyz(ZStep::new(-3).unwrap().into(), XyzLogical::ComponentwiseDelta), PE::VarInt, 3),
         3,
@@ -1688,14 +1478,18 @@ mod tests {
     )]
     #[case::f32_words(
         float(FloatLogical::None, PE::None, 2),
-        StreamCtx02::PropertyDictionary(DataType02::F32),
+        StreamCtx02::Property(DataType02::F32),
         &[0, 0, 0x80, 0x3F, 0, 0, 0, 0x40],
         &[0b0000_0000]
     )]
     #[case::bitmap(boolean(BoolLogical::None, PE::None, 9), BOOL, &[0b1010_1010, 1], &[0b1000_0000, 9])]
     #[case::bitmap_of_no_bits(boolean(BoolLogical::None, PE::None, 0), BOOL, &[], &[0b1000_0000, 0])]
-    #[case::runs(boolean(BoolLogical::Runs, PE::None, 9), BOOL, &[0, 9], &[0b1001_0000, 9])]
-    #[case::sparse(boolean(BoolLogical::Sparse, PE::None, 9), BOOL, &[0b10, 1], &[0b1010_0000, 9])]
+    #[case::byte_rle(
+        boolean(BoolLogical::ByteRle(rle(24)), PE::None, 24),
+        BOOL,
+        &[0x00, 0xFF],
+        &[0b1001_0000, 24]
+    )]
     #[case::vertex_pairs(
         vertex(VertexLogical::None, PE::None, 2),
         VERTEX,
@@ -1840,8 +1634,7 @@ mod tests {
     #[case::delta_rle_with_physical(INT, 0b0011_1000)]
     #[case::int_logical_past_table(INT, 0b0110_1000)]
     #[case::bool_logical_past_table(BOOL, 0b0010_0100)]
-    #[case::float_dict_with_extension(FLOAT, 0b0011_0101)]
-    #[case::float_alp_with_extension(FLOAT, 0b0010_1001)]
+    #[case::float_logical_past_table_with_extension(FLOAT, 0b0011_0101)]
     #[case::vertex_logical_past_table(VERTEX, 0b0101_1000)]
     #[case::float_physical_varint(FLOAT, 0b0000_1000)]
     #[case::float_physical_fastpfor(FLOAT, 0b0000_1100)]
@@ -1856,13 +1649,13 @@ mod tests {
     #[case::blob_front_coded_no_len(BLOB, 0b0001_0000)]
     #[case::delta_no_len(INT, 0b0001_0000)]
     #[case::str_delta_no_len(STR_PLAIN, 0b0001_0000)]
-    #[case::float_alp_no_len(FLOAT, 0b0010_0000)]
-    #[case::float_dict_no_len(FLOAT, 0b0011_0000)]
+    #[case::float_logical_past_table_no_len(FLOAT, 0b0010_0000)]
     #[case::vertex_delta_no_len(VERTEX, 0b0001_0000)]
     #[case::cw_delta_no_len(VERTEX, 0b0010_0000)]
     #[case::morton_no_len(VERTEX, 0b0011_0000)]
+    #[case::predicted_with_physical(VERTEX, 0b0100_1000)]
     #[case::xyz_morton(VERTEX, 0b0011_1001)]
-    #[case::xyz_cw_delta2(VERTEX, 0b0100_1001)]
+    #[case::xyz_predicted(VERTEX, 0b0100_0001)]
     #[case::vertex_extension_bit1(VERTEX, 0b0010_1010)]
     #[case::vertex_both_extension_bits(VERTEX, 0b0010_1011)]
     #[case::xyz_cw_delta_no_len(VERTEX, 0b0010_0001)]
@@ -1914,6 +1707,13 @@ mod tests {
             .ok()
             .map(|(_, p)| p.meta.encoding.logical);
         assert_ne!(as_float, Some(as_int));
+    }
+
+    #[test]
+    fn a_blob_header_is_its_encoding_byte_then_its_byte_length() {
+        let mut buf = Vec::new();
+        write_blob_meta(&mut buf, DictLayout::Plain, 3).unwrap();
+        assert_eq!(buf, [0b0000_0100, 3]);
     }
 
     #[rstest]
@@ -1977,20 +1777,9 @@ mod tests {
     }
 
     #[rstest]
-    #[case::explicit_count(HAS_EXPLICIT_COUNT | shared_coding_byte(PresenceCoding::Runs))]
-    #[case::physical_field(shared_coding_byte(PresenceCoding::Runs) | PhysicalInt::VarInt as u8)]
-    fn a_shared_bitfield_byte_that_names_no_coding_is_rejected(#[case] byte: u8) {
-        assert_eq!(shared_coding(byte), None);
-    }
-
-    #[rstest]
-    #[case::fastpfor_256_blocks(
-        int(IntLogical::None, PE::FastPFor(FastPForKind::Block256Be), 5),
-        INT_FAMILY
-    )]
     #[case::varint_floats(float(FloatLogical::None, PE::VarInt, 5), FLOAT_FAMILY)]
-    #[case::varint_bools(boolean(BoolLogical::Runs, PE::VarInt, 5), Family::Bool)]
-    #[case::varint_rans(vertex(VertexLogical::Rans, PE::VarInt, 5), Family::Vertex)]
+    #[case::varint_bools(boolean(BoolLogical::ByteRle(rle(5)), PE::VarInt, 5), Family::Bool)]
+    #[case::varint_predicted(vertex(VertexLogical::Predicted, PE::VarInt, 6), Family::Vertex)]
     #[case::rle_without_varint(int(IntLogical::Rle(rle(5)), PE::None, 5), INT_FAMILY)]
     fn write_rejects_a_physical_codec_the_encoding_cannot_carry(
         #[case] meta: StreamMeta,
@@ -2089,16 +1878,15 @@ mod tests {
         })),
         Family::Bool
     )]
-    #[case::dict_on_an_int_column(LogicalEncoding::Float(FloatLogical::Dict), INT_FAMILY)]
-    #[case::dict_on_a_vertex_stream(LogicalEncoding::Float(FloatLogical::Dict), Family::Vertex)]
-    #[case::alp_on_an_int_column(
-        LogicalEncoding::Float(FloatLogical::Alp(Alp::new(1, 0, 0).unwrap())),
+    #[case::predicted_on_an_int_column(
+        LogicalEncoding::Vertex(VertexLogical::Predicted),
         INT_FAMILY
     )]
-    #[case::alp_on_a_bool_column(
-        LogicalEncoding::Float(FloatLogical::Alp(Alp::new(1, 0, 0).unwrap())),
+    #[case::predicted_on_a_bool_column(
+        LogicalEncoding::Vertex(VertexLogical::Predicted),
         Family::Bool
     )]
+    #[case::delta_on_a_float_column(LogicalEncoding::Int(IntLogical::Delta), FLOAT_FAMILY)]
     fn write_rejects_an_encoding_the_family_does_not_list(
         #[case] logical: LogicalEncoding,
         #[case] family: Family,

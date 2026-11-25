@@ -9,8 +9,6 @@ use crate::decoder::LayerHeader02;
 #[cfg(feature = "unstable-v2")]
 use crate::decoder::stream::header02::{Count02, Family, WordWidth};
 use crate::decoder::{ColumnType, Morton};
-#[cfg(feature = "unstable-v2")]
-use crate::encoder::model::FloatEncoding;
 use crate::encoder::model::{CurveParams, ExplicitEncoder, StrEncoding, StreamCtx};
 use crate::encoder::{EncoderConfig, IntEncoder, Network, Profile, VertexBufferType};
 use crate::utils::BinarySerializer as _;
@@ -347,14 +345,6 @@ impl Encoder {
         self.explicit.as_ref().map(|e| (e.get_str_encoding)(name))
     }
 
-    /// When [`Self::explicit`] is [`Some`], returns the callback-chosen [`FloatEncoding`].
-    /// [`None`] means cost the float encodings the config allows against each other.
-    #[inline]
-    #[cfg(feature = "unstable-v2")]
-    pub(crate) fn override_float_enc(&self, name: &str) -> Option<FloatEncoding> {
-        self.explicit.as_ref().map(|e| (e.get_float_encoding)(name))
-    }
-
     /// Pinned vertex layout when an explicit encoder is active.
     #[inline]
     #[allow(clippy::unused_self)]
@@ -378,6 +368,17 @@ impl Encoder {
     #[must_use]
     pub fn total_len(&self) -> usize {
         self.hdr.len() + self.meta.len() + self.data.len()
+    }
+
+    /// What a whole-layer trial is ranked by: [`Self::total_len`], or under compressed
+    /// selection the deflated size of the layer's bytes.
+    #[must_use]
+    pub fn ranked_len(&self) -> usize {
+        if self.cfg.compressed_selection() {
+            deflated_len(&[&self.hdr, &self.meta, &self.data])
+        } else {
+            self.total_len()
+        }
     }
 
     /// Empty the output buffers so this encoder can be reused for the next sort trial.
@@ -460,6 +461,7 @@ impl Encoder {
             meta_start: self.meta.len(),
             best_data: None,
             best_meta: None,
+            best_rank: None,
         });
         AltSession { enc: self }
     }
@@ -475,9 +477,16 @@ impl Encoder {
             !self.alt_stack.is_empty(),
             "alt_commit called outside an active AltSession"
         );
+        let compressed = self.cfg.compressed_selection();
         let (data, meta, stack) = (&mut self.data, &mut self.meta, &mut self.alt_stack);
         let level = stack.last_mut().unwrap();
-        Self::close_candidate(data, meta, level);
+        Self::close_candidate(data, meta, level, compressed);
+    }
+
+    /// The size a candidate of `data` and `meta_len` metadata bytes is ranked by.
+    #[cfg(feature = "unstable-v2")]
+    pub(crate) fn rank(&self, data: &[u8], meta_len: usize) -> usize {
+        rank(self.cfg.compressed_selection(), data, meta_len)
     }
 
     /// Finalize the innermost competition and pop it from the stack.
@@ -491,12 +500,13 @@ impl Encoder {
             "alt_pop called outside an active AltSession"
         );
         {
+            let compressed = self.cfg.compressed_selection();
             let (data, meta, stack) = (&mut self.data, &mut self.meta, &mut self.alt_stack);
             let level = stack.last_mut().unwrap();
             let data_pending = data.len() - (level.data_start + level.best_data.unwrap_or(0));
             let meta_pending = meta.len() - (level.meta_start + level.best_meta.unwrap_or(0));
             if data_pending > 0 || meta_pending > 0 || level.best_data.is_none() {
-                Self::close_candidate(data, meta, level);
+                Self::close_candidate(data, meta, level, compressed);
             }
         }
         self.alt_stack.pop();
@@ -505,16 +515,22 @@ impl Encoder {
     /// Shared compare-and-keep logic used by both `alt_commit` and `alt_pop`.
     ///
     /// Compares the bytes written since the last committed candidate against
-    /// the current best by **total** (`data + meta`) size.
-    /// Keeps the shorter one; ties preserve the existing best.
-    fn close_candidate(data: &mut Vec<u8>, meta: &mut Vec<u8>, level: &mut AltLevel) {
+    /// the current best by [`rank`]: **total** (`data + meta`) size, or under
+    /// compressed selection the deflated data size plus the meta size.
+    /// Keeps the smaller one; ties preserve the existing best.
+    fn close_candidate(
+        data: &mut Vec<u8>,
+        meta: &mut Vec<u8>,
+        level: &mut AltLevel,
+        compressed: bool,
+    ) {
         let best_data_end = level.data_start + level.best_data.unwrap_or(0);
         let best_meta_end = level.meta_start + level.best_meta.unwrap_or(0);
         let cand_data = data.len() - best_data_end;
         let cand_meta = meta.len() - best_meta_end;
-        let cand_total = cand_data + cand_meta;
-        let best_total = level.best_data.unwrap_or(0) + level.best_meta.unwrap_or(0);
-        if level.best_data.is_none_or(|_| cand_total < best_total) {
+        let cand_rank = rank(compressed, &data[best_data_end..], cand_meta);
+        if level.best_rank.is_none_or(|best| cand_rank < best) {
+            level.best_rank = Some(cand_rank);
             // New best: shift data candidate bytes to data_start.
             if level.best_data.is_some() {
                 data.copy_within(best_data_end..best_data_end + cand_data, level.data_start);
@@ -548,6 +564,56 @@ struct AltLevel {
     best_data: Option<usize>,
     /// Byte count appended to `meta` by the current best candidate.
     best_meta: Option<usize>,
+    /// The [`rank`] of the current best candidate.
+    best_rank: Option<usize>,
+}
+
+/// Candidates below this many data bytes are ranked by stored size even under compressed
+/// selection: deflating them alone says more about deflate's framing than about the tile.
+const MIN_COMPRESSED_RANK_BYTES: usize = 32;
+
+/// The size a candidate is ranked by, see [`Encoder::close_candidate`].
+fn rank(compressed: bool, data: &[u8], meta_len: usize) -> usize {
+    if compressed && data.len() >= MIN_COMPRESSED_RANK_BYTES {
+        deflated_len(&[data]) + meta_len
+    } else {
+        data.len() + meta_len
+    }
+}
+
+/// The deflated size of `parts` as one stream.
+#[cfg(feature = "compressed-selection")]
+fn deflated_len(parts: &[&[u8]]) -> usize {
+    use std::cell::RefCell;
+
+    use flate2::{Compress, Compression, FlushCompress};
+
+    thread_local! {
+        static DEFLATE: RefCell<(Compress, Vec<u8>)> =
+            RefCell::new((Compress::new(Compression::new(6), false), Vec::new()));
+    }
+    let total: usize = parts.iter().map(|p| p.len()).sum();
+    DEFLATE.with_borrow_mut(|(deflate, out)| {
+        deflate.reset();
+        out.clear();
+        out.reserve(total + total / 8 + 64 * (parts.len() + 1));
+        for (i, part) in parts.iter().enumerate() {
+            let flush = if i + 1 == parts.len() {
+                FlushCompress::Finish
+            } else {
+                FlushCompress::None
+            };
+            deflate
+                .compress_vec(part, out, flush)
+                .expect("deflating into a buffer of the worst-case size cannot fail");
+        }
+        out.len()
+    })
+}
+
+#[cfg(not(feature = "compressed-selection"))]
+fn deflated_len(parts: &[&[u8]]) -> usize {
+    parts.iter().map(|p| p.len()).sum()
 }
 
 /// RAII guard for a stream-encoding competition opened by [`Encoder::try_alternatives`].

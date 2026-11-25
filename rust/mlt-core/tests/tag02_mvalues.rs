@@ -2,8 +2,8 @@
 
 use mlt_core::dump::{DumpTree, RenderOpts, annotate_tile, render};
 use mlt_core::encoder::{
-    Codecs, Encoder, EncoderConfig, ExplicitEncoder, FloatEncoding, IntEncoder, Network, Profile,
-    StagedId, StagedLayer, StagedMValue, StagedValues, StrEncoding, Tessellation, VertexBufferType,
+    Codecs, Encoder, EncoderConfig, ExplicitEncoder, IntEncoder, Network, Profile, StagedId,
+    StagedLayer, StagedMValue, StagedValues, StrEncoding, Tessellation, VertexBufferType,
     WireVersion,
 };
 use mlt_core::geo_types::{
@@ -158,8 +158,7 @@ fn a_line_layer_holds_one_value_per_vertex() {
     an m-value section ends the body
     every feature is a LineString, no types stream
     extent 2^(n+6) = 4096
-    shared bitfields are bitmaps
-    shared presence bitfields = 0
+    reserved
     geometry layout = Lines
     m_value[0] I32 "dist": presence = AllPresent
     "#);
@@ -320,8 +319,7 @@ fn a_feature_with_no_values_stores_an_inline_bitfield_and_no_values() {
     an m-value section ends the body
     every feature is a LineString, no types stream
     extent 2^(n+6) = 4096
-    shared bitfields are bitmaps
-    shared presence bitfields = 0
+    reserved
     geometry layout = Lines
     m_value[0] OptI32 "m": presence = Inline(Bitmap)
     "#);
@@ -335,7 +333,7 @@ fn a_feature_with_no_values_stores_an_inline_bitfield_and_no_values() {
 }
 
 #[test]
-fn two_m_value_columns_with_the_same_nulls_share_one_bitfield() {
+fn two_m_value_columns_with_the_same_nulls_each_carry_a_bitfield() {
     let geoms = vec![
         line(&[(0, 0), (1, 1)]),
         line(&[(2, 2), (3, 3)]),
@@ -354,16 +352,15 @@ fn two_m_value_columns_with_the_same_nulls_share_one_bitfield() {
     an m-value section ends the body
     every feature is a LineString, no types stream
     extent 2^(n+6) = 4096
-    shared bitfields are bitmaps
-    shared presence bitfields = 1
+    reserved
     geometry layout = Lines
-    m_value[0] OptI32 "a": presence = Shared(0)
-    m_value[1] OptI32 "b": presence = Shared(0)
+    m_value[0] OptI32 "a": presence = Inline(Bitmap)
+    m_value[1] OptI32 "b": presence = Inline(Bitmap)
     "#);
 }
 
 #[test]
-fn an_m_value_column_shares_a_bitfield_with_a_property_column() {
+fn an_m_value_column_and_a_property_column_each_carry_a_bitfield() {
     let mut builder = TileLayer::builder("test_layer", 4096).unwrap();
     let prop = builder.add_property("p", PropKind::U32).unwrap();
     let m = builder.add_m_value("m", PropKind::I32).unwrap();
@@ -384,11 +381,10 @@ fn an_m_value_column_shares_a_bitfield_with_a_property_column() {
     an m-value section ends the body
     every feature is a LineString, no types stream
     extent 2^(n+6) = 4096
-    shared bitfields are bitmaps
-    shared presence bitfields = 1
+    reserved
     geometry layout = Lines
-    column[0] OptU32 "p": presence = Shared(0)
-    m_value[0] OptI32 "m": presence = Shared(0)
+    column[0] OptU32 "p": presence = Inline(Bitmap)
+    m_value[0] OptI32 "m": presence = Inline(Bitmap)
     "#);
 }
 
@@ -425,8 +421,7 @@ fn m_values_keep_the_outlines_of_a_triangles_only_layer() {
     an m-value section ends the body
     every feature is a Polygon, no types stream
     extent 2^(n+6) = 4096
-    shared bitfields are bitmaps
-    shared presence bitfields = 0
+    reserved
     geometry layout = TessPolygonsWithOutlines
     m_value[0] I32 "m": presence = AllPresent
     "#);
@@ -744,7 +739,6 @@ fn encode_dictionary_vertex_layer() -> Vec<u8> {
         force_stream: Box::new(|_| false),
         get_int_encoder: Box::new(|_| IntEncoder::varint()),
         get_str_encoding: Box::new(|_| StrEncoding::Plain),
-        get_float_encoding: Box::new(|_| FloatEncoding::None),
     };
     staged
         .encode_into(
@@ -763,8 +757,7 @@ fn a_dictionary_vertex_layout_holds_one_value_per_offset() {
     an m-value section ends the body
     every feature is a LineString, no types stream
     extent 2^(n+6) = 4096
-    shared bitfields are bitmaps
-    shared presence bitfields = 0
+    reserved
     geometry layout = LinesDict
     m_value[0] I32 "m": presence = AllPresent
     "#);

@@ -7,8 +7,6 @@ use serde::{Serialize, Serializer};
 
 #[cfg(feature = "unstable-v2")]
 use crate::codecs::presence_coding::PresenceCoding;
-#[cfg(feature = "unstable-v2")]
-use crate::wire::Alp;
 use crate::wire::StreamMeta;
 
 /// Whether a region is tile metadata or an opaque data payload.
@@ -39,9 +37,6 @@ pub enum DecodeHint {
     GeometryType,
     /// Signed 64-bit integers (`i64` columns).
     I64,
-    /// Framed, Exception-Free ALP offsets, put back on their frame of reference.
-    #[cfg(feature = "unstable-v2")]
-    Alp(#[serde(serialize_with = "serialize_alp")] Alp),
     /// Unsigned 64-bit integers (`u64` columns, 64-bit ids).
     U64,
     /// 32-bit floats.
@@ -53,22 +48,9 @@ pub enum DecodeHint {
     /// A raw LSB0 bitfield, not a stream: `ceil(num_values/8)` packed bytes.
     #[cfg(feature = "unstable-v2")]
     PackedBits,
-    /// Presence bits that are not laid out as bits: runs, or a list of indices.
+    /// Presence bits that are not laid out as bits, such as a byte-RLE coded bitmap.
     #[cfg(feature = "unstable-v2")]
     PresenceCoded(PresenceCoding),
-    /// A rANS vertex payload, which only decodes with the layer's topology, so its parts are shown instead.
-    #[cfg(feature = "unstable-v2")]
-    Rans,
-}
-
-/// Framed, Exception-Free ALP's parameters flattened beside the hint's tag, keeping `Alp`'s fields crate-private.
-#[cfg(feature = "unstable-v2")]
-fn serialize_alp<S: Serializer>(alp: &Alp, s: S) -> Result<S::Ok, S::Error> {
-    let mut st = s.serialize_struct("Alp", 3)?;
-    st.serialize_field("e", &alp.scale.e)?;
-    st.serialize_field("f", &alp.scale.f)?;
-    st.serialize_field("base", &alp.base)?;
-    st.end()
 }
 
 /// One sub-field of a bit-packed byte, e.g. a nibble of `stream_type`.

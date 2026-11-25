@@ -1,4 +1,4 @@
-//! v2 decode with and without rANS vertices, against the gunzip + MVT decode it has to beat.
+//! v2 decode with and without predicted vertices, against the gunzip + MVT decode it has to beat.
 
 use std::hint::black_box;
 
@@ -17,8 +17,12 @@ const CORPORA: [&str; 4] = ["omt", "amazon", "amazon_here", "bing"];
 fn cfg_v2() -> EncoderConfig {
     EncoderConfig::from_profile(Profile::Native(Network::Cellular4G))
         .with_wire_version(WireVersion::V02)
-        .with_float_alp(true)
-        .with_float_dict(true)
+}
+
+/// The v2 encoding `mlt convert --mlt-version 2 --profile web` writes, with predicted vertices.
+fn cfg_web() -> EncoderConfig {
+    EncoderConfig::from_profile(Profile::Web(Network::Cellular4G))
+        .with_wire_version(WireVersion::V02)
 }
 
 fn encode(mvt: &[(String, Vec<u8>)], cfg: EncoderConfig) -> Vec<(String, Vec<u8>)> {
@@ -53,12 +57,12 @@ fn bench_decode(c: &mut Criterion) {
             .map(|(path, data)| (path.clone(), compress_gzip(data)))
             .collect();
         let plain = encode(&mvt, cfg_v2());
-        let rans = encode(&mvt, cfg_v2().with_rans_vertices(true));
+        let web = encode(&mvt, cfg_web());
         eprintln!(
-            "{corpus}: mvt+gzip {} B, v2 {} B, v2+rans {} B",
+            "{corpus}: mvt+gzip {} B, v2 {} B, v2 web {} B",
             total_bytes(&gz),
             total_bytes(&plain),
-            total_bytes(&rans)
+            total_bytes(&web)
         );
         group.bench_with_input(BenchmarkId::new("mvt+gzip", corpus), &gz, |b, t| {
             b.iter(|| {
@@ -70,7 +74,7 @@ fn bench_decode(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("mlt-v2", corpus), &plain, |b, t| {
             b.iter(|| mlt_decode(t));
         });
-        group.bench_with_input(BenchmarkId::new("mlt-v2+rans", corpus), &rans, |b, t| {
+        group.bench_with_input(BenchmarkId::new("mlt-v2-web", corpus), &web, |b, t| {
             b.iter(|| mlt_decode(t));
         });
     }

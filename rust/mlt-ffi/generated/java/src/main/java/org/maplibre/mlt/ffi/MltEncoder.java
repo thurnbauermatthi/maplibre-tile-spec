@@ -382,29 +382,14 @@ public final class MltEncoder implements AutoCloseable {
       return set(MltEncoderOptions.Flag.TRIANGLES_ONLY, enabled);
     }
 
-    /** v2 only: allows integer and vertex streams to store the deltas of their deltas. */
-    public Builder allowDelta2(boolean enabled) {
-      return set(MltEncoderOptions.Flag.DELTA2, enabled);
+    /** v2 only: allows plain vertex streams to be stored as predicted vertices. */
+    public Builder allowPredictedVertices(boolean enabled) {
+      return set(MltEncoderOptions.Flag.PREDICTED_VERTICES, enabled);
     }
 
-    /** v2 only: allows float columns to store one code per value into a dictionary. */
-    public Builder allowFloatDict(boolean enabled) {
-      return set(MltEncoderOptions.Flag.FLOAT_DICT, enabled);
-    }
-
-    /** v2 only: allows float columns to store each value as a decimal-scaled integer (ALP). */
-    public Builder allowFloatAlp(boolean enabled) {
-      return set(MltEncoderOptions.Flag.FLOAT_ALP, enabled);
-    }
-
-    /** v2 only: allows dictionary code streams to be bit-packed. */
-    public Builder allowPackedDictCodes(boolean enabled) {
-      return set(MltEncoderOptions.Flag.PACKED_DICT_CODES, enabled);
-    }
-
-    /** v2 only: allows plain vertex streams to be rANS-coded. */
-    public Builder allowRansVertices(boolean enabled) {
-      return set(MltEncoderOptions.Flag.RANS_VERTICES, enabled);
+    /** v2 only: allows presence bitfields and bool columns to be byte-RLE coded, an extension. */
+    public Builder allowPresenceRle(boolean enabled) {
+      return set(MltEncoderOptions.Flag.PRESENCE_RLE, enabled);
     }
 
     /** v2 only: lets a nested struct or map code its row shapes instead of per-field presence. */

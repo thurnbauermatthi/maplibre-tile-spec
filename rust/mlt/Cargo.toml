@@ -45,7 +45,7 @@ martin-tile-utils.workspace = true
 mbtiles.workspace = true
 meshopt.workspace = true
 mimalloc.workspace = true
-mlt-core = { workspace = true, features = ["unstable-v2"] }
+mlt-core = { workspace = true, features = ["unstable-v2", "compressed-selection"] }
 moka.workspace = true
 pmtiles.workspace = true
 proj4rs.workspace = true

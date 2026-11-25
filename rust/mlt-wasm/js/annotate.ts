@@ -60,9 +60,7 @@ export type DecodeHint =
   | { kind: "f32" }
   | { kind: "f64" }
   | { kind: "bytes" }
-  | { kind: "packedBits" }
-  | { kind: "rans" }
-  | { kind: "alp"; e: number; f: number; base: bigint };
+  | { kind: "packedBits" };
 
 export type DecodedBlob =
   | { kind: "numbers"; values: number[]; truncatedFrom: number | null }

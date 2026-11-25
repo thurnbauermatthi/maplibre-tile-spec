@@ -17,6 +17,32 @@ pub enum MltError {
     DataWidthMismatch(&'static str, &'static str),
     #[error("dictionary index {0} out of bounds (len={1})")]
     DictIndexOutOfBounds(u32, usize),
+    #[cfg(feature = "unstable-v2")]
+    #[error(
+        "front-coded lengths stream holds a prefix and a suffix length per entry, so its {0} values cannot be split in two"
+    )]
+    FrontCodedOddLengthCount(usize),
+    #[cfg(feature = "unstable-v2")]
+    #[error(
+        "front-coded entry {index} shares {shared} bytes with a predecessor of only {available}"
+    )]
+    FrontCodedPrefixTooLong {
+        index: usize,
+        shared: usize,
+        available: usize,
+    },
+    #[cfg(feature = "unstable-v2")]
+    #[error(
+        "front-coded entry {index} needs {needed} suffix bytes, but {available} remain in the blob"
+    )]
+    FrontCodedSuffixOutOfBounds {
+        index: usize,
+        needed: usize,
+        available: usize,
+    },
+    #[cfg(feature = "unstable-v2")]
+    #[error("front-coded dictionary leaves {0} suffix bytes after its last entry")]
+    FrontCodedTrailingSuffixBytes(usize),
     #[error("duplicate value found where unique required")]
     DuplicateValue,
     #[error("Integer overflow")]
@@ -356,12 +382,6 @@ pub enum MltError {
     RleRunLenInvalid(i128),
     #[error("presence runs overflow the {0} features they cover")]
     PresenceRunOverflow(u32),
-    #[error("sparse presence summary names bytes past the bitmap of {0} features")]
-    PresenceSparseSummary(u32),
-    #[error("sparse presence stores a zero byte within {0} features")]
-    PresenceSparseByte(u32),
-    #[error("unknown presence coding byte: 0x{0:02X}")]
-    PresenceCodingByte(u8),
 
     // Structural constraints (lengths, counts, shapes)
     #[error("geometry requires at least 1 stream, got 0")]
@@ -381,50 +401,14 @@ pub enum MltError {
     #[error("FSST-compressed data is malformed: {0}")]
     MalformedFsst(&'static str),
     #[cfg(feature = "unstable-v2")]
-    #[error("rANS vertex stream is malformed: {0}")]
-    MalformedRans(&'static str),
+    #[error("predicted vertex stream is malformed: {0}")]
+    MalformedPredicted(&'static str),
     #[cfg(feature = "unstable-v2")]
     #[error("triangle trees are malformed: {0}")]
     MalformedTriangles(&'static str),
     #[cfg(feature = "unstable-v2")]
     #[error("triangle tree names vertex {0} of a layer with {1} vertices")]
     TreeVertexOutOfBounds(u32, usize),
-    #[cfg(feature = "unstable-v2")]
-    #[error("dictionary code {0} is out of range for a dictionary of {1} values")]
-    DictionaryCodeOutOfRange(u32, usize),
-    #[cfg(feature = "unstable-v2")]
-    #[error(
-        "front-coded lengths stream holds a prefix and a suffix length per entry, so its {0} values cannot be split in two"
-    )]
-    FrontCodedOddLengthCount(usize),
-    #[cfg(feature = "unstable-v2")]
-    #[error(
-        "front-coded entry {index} shares {shared} bytes with a predecessor of only {available}"
-    )]
-    FrontCodedPrefixTooLong {
-        index: usize,
-        shared: usize,
-        available: usize,
-    },
-    #[cfg(feature = "unstable-v2")]
-    #[error(
-        "front-coded entry {index} needs {needed} suffix bytes, but {available} remain in the blob"
-    )]
-    FrontCodedSuffixOutOfBounds {
-        index: usize,
-        needed: usize,
-        available: usize,
-    },
-    #[cfg(feature = "unstable-v2")]
-    #[error("front-coded dictionary leaves {0} suffix bytes after its last entry")]
-    FrontCodedTrailingSuffixBytes(usize),
-    #[cfg(feature = "unstable-v2")]
-    #[error("no Framed, Exception-Free ALP parameters return this float column bit-for-bit")]
-    NoAlpParameters,
-    #[error("invalid Framed, Exception-Free ALP parameters: e={0}, f={1}")]
-    InvalidAlpParams(u8, u8),
-    #[error("invalid Framed, Exception-Free ALP scale byte {0}")]
-    InvalidAlpScale(u8),
     #[error("presence stream has {0} bits set but {1} values provided")]
     PresenceValueCountMismatch(usize, usize),
     #[error("need to encode before being able to write")]

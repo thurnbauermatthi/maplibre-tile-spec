@@ -5,13 +5,7 @@ use num_traits::{PrimInt, WrappingSub};
 use zigzag::ZigZag;
 
 use crate::MltError::UnsupportedPhysicalEncoding;
-#[cfg(feature = "unstable-v2")]
-use crate::MltError::UnsupportedPhysicalEncodingForType;
 use crate::MltResult;
-#[cfg(feature = "unstable-v2")]
-use crate::codecs::bitpack;
-#[cfg(feature = "unstable-v2")]
-use crate::codecs::zigzag::encode_zigzag_delta2;
 use crate::codecs::zigzag::{encode_zigzag, encode_zigzag_delta};
 use crate::decoder::stream::header01;
 #[cfg(feature = "unstable-v2")]
@@ -90,32 +84,17 @@ impl PhysicalCodecs {
         &self.u8_tmp
     }
 
-    /// Pack `values` into the width their largest needs, or [`None`] when that
-    /// width is out of the codec's range.
-    #[cfg(feature = "unstable-v2")]
-    pub(crate) fn bitpack<T>(&mut self, values: &[T]) -> Option<&[u8]>
-    where
-        T: Copy + Into<u64>,
-    {
-        let width = bitpack::bit_width(values)?;
-        self.u8_tmp.clear();
-        bitpack::pack(values, width, &mut self.u8_tmp);
-        Some(&self.u8_tmp)
-    }
-
     pub(crate) fn fastpfor(&mut self, kind: FastPForKind, values: &[u32]) -> MltResult<&[u8]> {
         self.u32_tmp.clear();
         if !values.is_empty() {
             match kind {
                 FastPForKind::Block256Be => {
                     self.fastpfor256.encode(values, &mut self.u32_tmp)?;
-                    // v1 stores the compressed words big-endian, so swap them on the way out.
+                    // The compressed words are stored big-endian, so swap them on the way out.
                     for word in &mut self.u32_tmp {
                         *word = word.to_be();
                     }
                 }
-                #[cfg(feature = "unstable-v2")]
-                FastPForKind::Block128Le => self.fastpfor128.encode(values, &mut self.u32_tmp)?,
             }
         }
         Ok(cast_slice(&self.u32_tmp))
@@ -134,29 +113,7 @@ impl PhysicalCodecs {
         let (pe, vals) = match encode_as {
             PhysicalEncoder::None => (PE::None, P::none(self, values)),
             PhysicalEncoder::VarInt => (PE::VarInt, self.varint(values)),
-            // v1 has no code for bit packing, and one layer is encoded as both versions.
-            #[cfg(feature = "unstable-v2")]
-            PhysicalEncoder::BitPacked if enc.config().wire_version() == WireVersion::V01 => {
-                (PE::VarInt, self.varint(values))
-            }
-            #[expect(
-                clippy::unnecessary_lazy_evaluations,
-                reason = "an eager error is dropped on every success"
-            )]
-            #[cfg(feature = "unstable-v2")]
-            PhysicalEncoder::BitPacked => (
-                PE::BitPacked,
-                self.bitpack(values).ok_or_else(|| {
-                    UnsupportedPhysicalEncodingForType(
-                        PE::BitPacked,
-                        "values that need more than 32 bits",
-                    )
-                })?,
-            ),
             PhysicalEncoder::FastPFOR => {
-                #[cfg(feature = "unstable-v2")]
-                let kind = enc.config().wire_version().fastpfor_kind();
-                #[cfg(not(feature = "unstable-v2"))]
                 let kind = FastPForKind::Block256Be;
                 (PE::FastPFor(kind), P::fastpfor(self, kind, values)?)
             }
@@ -172,22 +129,9 @@ impl PhysicalCodecs {
         logical: LogicalEncoding,
         stream_type: StreamType,
         fastpfor: Option<PhysicalEncoding>,
-        #[cfg(feature = "unstable-v2")] bitpacked: bool,
     ) -> MltResult<()> {
         use PhysicalEncoding as PE;
 
-        // Bit packing is over the values as they are, so it only competes where they are.
-        #[cfg(feature = "unstable-v2")]
-        if bitpacked && logical == LogicalEncoding::Int(IntLogical::None) {
-            let width = bitpack::bit_width(values);
-            if width.is_some() {
-                alt.with(|enc| {
-                    let meta = StreamMeta::new2(stream_type, logical, PE::BitPacked, values.len())?;
-                    let payload = self.bitpack(values).expect("width was just measured");
-                    write_stream_payload(enc, meta, false, payload)
-                })?;
-            }
-        }
         // `FASTPFOR_ALLOWED` is the type-level capability: FastPFOR only supports u32.
         // `fastpfor` is the caller's runtime preference, already resolved to this layer's codec.
         // v2's interleaved RLE is a varint pair stream, so it admits no other physical encoding.
@@ -245,10 +189,6 @@ pub(crate) trait LogicalIntCodec<T: LogicalIntStreamKind + ?Sized> {
 
     fn delta<'a>(&'a mut self, values: &'a T) -> &'a [<T::Output as PhysicalIntStreamKind>::Value];
 
-    #[cfg(feature = "unstable-v2")]
-    fn delta2<'a>(&'a mut self, values: &'a T)
-    -> &'a [<T::Output as PhysicalIntStreamKind>::Value];
-
     fn rle<'a>(
         &'a mut self,
         values: &'a T,
@@ -303,12 +243,6 @@ impl LogicalIntStreamKind for [u8] {
 }
 
 impl LogicalIntCodec<[u8]> for LogicalCodecs {
-    #[cfg(feature = "unstable-v2")]
-    fn delta2<'a>(&'a mut self, values: &'a [u8]) -> &'a [u32] {
-        let wide: Vec<i32> = values.iter().map(|&v| i32::from(v)).collect();
-        encode_zigzag_delta2(&wide, &mut self.u32_tmp)
-    }
-
     fn none<'a>(&'a mut self, values: &'a [u8]) -> &'a [u32] {
         encode_u8_as_u32(values, &mut self.u32_tmp)
     }
@@ -348,12 +282,6 @@ impl LogicalIntStreamKind for [i8] {
 }
 
 impl LogicalIntCodec<[i8]> for LogicalCodecs {
-    #[cfg(feature = "unstable-v2")]
-    fn delta2<'a>(&'a mut self, values: &'a [i8]) -> &'a [u32] {
-        let wide: Vec<i32> = values.iter().map(|&v| i32::from(v)).collect();
-        encode_zigzag_delta2(&wide, &mut self.u32_tmp)
-    }
-
     fn none<'a>(&'a mut self, values: &'a [i8]) -> &'a [u32] {
         encode_i8_zigzag(values, &mut self.u32_tmp)
     }
@@ -393,11 +321,6 @@ impl LogicalIntStreamKind for [u32] {
 }
 
 impl LogicalIntCodec<[u32]> for LogicalCodecs {
-    #[cfg(feature = "unstable-v2")]
-    fn delta2<'a>(&'a mut self, values: &'a [u32]) -> &'a [u32] {
-        encode_zigzag_delta2(cast_slice::<u32, i32>(values), &mut self.u32_tmp)
-    }
-
     fn none<'a>(&'a mut self, values: &'a [u32]) -> &'a [u32] {
         values
     }
@@ -436,11 +359,6 @@ impl LogicalIntStreamKind for [i32] {
 }
 
 impl LogicalIntCodec<[i32]> for LogicalCodecs {
-    #[cfg(feature = "unstable-v2")]
-    fn delta2<'a>(&'a mut self, values: &'a [i32]) -> &'a [u32] {
-        encode_zigzag_delta2(values, &mut self.u32_tmp)
-    }
-
     fn none<'a>(&'a mut self, values: &'a [i32]) -> &'a [u32] {
         encode_zigzag(values, &mut self.u32_tmp)
     }
@@ -480,11 +398,6 @@ impl LogicalIntStreamKind for [u64] {
 }
 
 impl LogicalIntCodec<[u64]> for LogicalCodecs {
-    #[cfg(feature = "unstable-v2")]
-    fn delta2<'a>(&'a mut self, values: &'a [u64]) -> &'a [u64] {
-        encode_zigzag_delta2(cast_slice::<u64, i64>(values), &mut self.u64_tmp)
-    }
-
     fn none<'a>(&'a mut self, values: &'a [u64]) -> &'a [u64] {
         values
     }
@@ -523,11 +436,6 @@ impl LogicalIntStreamKind for [i64] {
 }
 
 impl LogicalIntCodec<[i64]> for LogicalCodecs {
-    #[cfg(feature = "unstable-v2")]
-    fn delta2<'a>(&'a mut self, values: &'a [i64]) -> &'a [u64] {
-        encode_zigzag_delta2(values, &mut self.u64_tmp)
-    }
-
     fn none<'a>(&'a mut self, values: &'a [i64]) -> &'a [u64] {
         encode_zigzag(values, &mut self.u64_tmp)
     }

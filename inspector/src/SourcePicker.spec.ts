@@ -17,7 +17,7 @@ const index: FixtureEntry[] = [
     name: "line.mlt",
     directory: "0x02",
     bytes: 8,
-    facets: { geometry: ["line-string"], logical: ["alp"] },
+    facets: { geometry: ["line-string"], logical: ["predicted"] },
   },
 ];
 
@@ -159,15 +159,17 @@ describe("the filter sheet", () => {
   it("counts every chip against what is already picked", async () => {
     const view = await sheetWith(picker(["geometry:point"]), "Streams");
     expect(chips(view, "logical").map(textOf)).toContain("rle1");
-    // `alp` is in the index, but not on a point tile, so picking it would dead-end.
-    expect(chips(view, "logical").map(textOf)).toContain("alp0");
+    // `predicted` is in the index, but not on a point tile, so picking it would dead-end.
+    expect(chips(view, "logical").map(textOf)).toContain("predicted0");
   });
 
   it("disables a chip that would narrow to nothing, rather than letting it", async () => {
     const view = await sheetWith(picker(["geometry:point"]), "Streams");
-    const alp = chips(view, "logical").find((c) => c.text() === "alp0");
-    expect(alp?.classes()).toContain("empty");
-    expect(alp?.attributes("disabled")).toBeDefined();
+    const predicted = chips(view, "logical").find(
+      (c) => c.text() === "predicted0",
+    );
+    expect(predicted?.classes()).toContain("empty");
+    expect(predicted?.attributes("disabled")).toBeDefined();
   });
 
   it("drops a pick from the chip that made it, there being no summary row", async () => {
@@ -201,8 +203,10 @@ describe("the filter sheet", () => {
   it("offers a chip for a word that is in no file name", async () => {
     const view = picker();
     await view.get(".open").trigger("click");
-    await view.get("input.filter").setValue("alp");
-    expect(view.findAll(".hits .chip").map(textOf)).toEqual(["logical alp1"]);
+    await view.get("input.filter").setValue("predicted");
+    expect(view.findAll(".hits .chip").map(textOf)).toEqual([
+      "logical predicted1",
+    ]);
   });
 
   it("counts coverage over the whole index rather than the picks", async () => {

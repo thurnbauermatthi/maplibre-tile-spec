@@ -7,15 +7,11 @@ use usize_cast::IntoUsize as _;
 use crate::MltError::{ParsingLogicalTechnique, RleRunLenInvalid, UnsupportedLogicalEncoding};
 #[cfg(feature = "unstable-v2")]
 use crate::codecs::zigzag::decode_componentwise_delta_vec3s;
-use crate::codecs::zigzag::{
-    decode_componentwise_delta_vec2s, decode_componentwise_delta2_vec2s, decode_zigzag,
-    decode_zigzag_delta, decode_zigzag_delta2,
-};
+use crate::codecs::zigzag::{decode_componentwise_delta_vec2s, decode_zigzag, decode_zigzag_delta};
 #[cfg(feature = "unstable-v2")]
 use crate::decoder::XyzLogical;
 use crate::decoder::{
-    FloatLogical, IntLogical, LogicalEncoding, LogicalTechnique, LogicalValue, RleMeta, StreamMeta,
-    VertexLogical,
+    IntLogical, LogicalEncoding, LogicalTechnique, LogicalValue, RleMeta, StreamMeta, VertexLogical,
 };
 use crate::errors::{AsMltError as _, fail_if_invalid_stream_size};
 use crate::{Decoder, MltResult};
@@ -144,10 +140,8 @@ impl LogicalValue {
                 let expanded = v.decode(data, dec)?;
                 decode_zigzag_delta::<i32, _>(&expanded, dec)
             }
-            LE::Int(IL::Delta2) => decode_zigzag_delta2::<i32, _>(data, dec),
-            LE::Vertex(VL::ComponentwiseDelta2) => decode_componentwise_delta2_vec2s(data, dec),
             LE::Vertex(VL::MortonDelta(v)) => v.decode_delta(data, dec),
-            LE::Vertex(VL::Rans) => Err(UnsupportedLogicalEncoding(
+            LE::Vertex(VL::Predicted) => Err(UnsupportedLogicalEncoding(
                 self.meta.encoding.logical,
                 "a stream decoded without the layer's topology",
             )),
@@ -176,7 +170,7 @@ impl LogicalValue {
     pub fn decode_u32(self, data: &[u32], dec: &mut Decoder) -> MltResult<Vec<u32>> {
         let num = self.meta.num_values.into_usize();
         match self.meta.encoding.logical {
-            LogicalEncoding::Int(IntLogical::None) | LogicalEncoding::Float(FloatLogical::Dict) => {
+            LogicalEncoding::Int(IntLogical::None) => {
                 // Caller should have used the direct-output path; this is a fallback.
                 dec.consume_items::<u32>(num)?;
                 Ok(data.to_vec())
@@ -186,7 +180,6 @@ impl LogicalValue {
             LogicalEncoding::Int(IntLogical::DeltaRle(rle)) => {
                 decode_zigzag_delta::<i32, _>(&rle.decode(data, dec)?, dec)
             }
-            LogicalEncoding::Int(IntLogical::Delta2) => decode_zigzag_delta2::<i32, _>(data, dec),
             LogicalEncoding::Bool(_) | LogicalEncoding::Float(_) | LogicalEncoding::Vertex(_) => {
                 Err(UnsupportedLogicalEncoding(
                     self.meta.encoding.logical,
@@ -213,7 +206,6 @@ impl LogicalValue {
                 let expanded = rle.decode(data, dec)?;
                 decode_zigzag(&expanded, dec)
             }
-            LogicalEncoding::Int(IntLogical::Delta2) => decode_zigzag_delta2::<i64, _>(data, dec),
             LogicalEncoding::Bool(_) | LogicalEncoding::Float(_) | LogicalEncoding::Vertex(_) => {
                 Err(UnsupportedLogicalEncoding(
                     self.meta.encoding.logical,
@@ -230,7 +222,7 @@ impl LogicalValue {
     pub fn decode_u64(self, data: &[u64], dec: &mut Decoder) -> MltResult<Vec<u64>> {
         let num = self.meta.num_values.into_usize();
         match self.meta.encoding.logical {
-            LogicalEncoding::Int(IntLogical::None) | LogicalEncoding::Float(FloatLogical::Dict) => {
+            LogicalEncoding::Int(IntLogical::None) => {
                 // Caller should have used the direct-output path; this is a fallback.
                 dec.consume_items::<u64>(num)?;
                 Ok(data.to_vec())
@@ -241,7 +233,6 @@ impl LogicalValue {
                 let expanded = rle.decode(data, dec)?;
                 decode_zigzag_delta::<i64, _>(&expanded, dec)
             }
-            LogicalEncoding::Int(IntLogical::Delta2) => decode_zigzag_delta2::<i64, _>(data, dec),
             LogicalEncoding::Bool(_) | LogicalEncoding::Float(_) | LogicalEncoding::Vertex(_) => {
                 Err(UnsupportedLogicalEncoding(
                     self.meta.encoding.logical,
@@ -300,10 +291,10 @@ mod tests {
 
     #[rstest::rstest]
     #[case::i32_bool(LogicalEncoding::Bool(crate::decoder::BoolLogical::None), "i32")]
-    #[case::i32_float(LogicalEncoding::Float(FloatLogical::None), "i32")]
+    #[case::i32_float(LogicalEncoding::Float(crate::decoder::FloatLogical::None), "i32")]
     #[case::u32_vertex(LogicalEncoding::Vertex(VertexLogical::None), "u32")]
     #[case::i64_bool(LogicalEncoding::Bool(crate::decoder::BoolLogical::None), "i64")]
-    #[case::u64_float(LogicalEncoding::Float(FloatLogical::None), "u64")]
+    #[case::u64_float(LogicalEncoding::Float(crate::decoder::FloatLogical::None), "u64")]
     fn a_decoder_rejects_an_encoding_of_another_kind(
         #[case] logical: LogicalEncoding,
         #[case] target: &str,

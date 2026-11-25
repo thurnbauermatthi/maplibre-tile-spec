@@ -6,12 +6,8 @@ use bitvec::view::BitView as _;
 use usize_cast::IntoUsize as _;
 
 use crate::codecs::bytes::{PhysicalWord, debug_assert_length, decode_bytes_to_words};
-#[cfg(feature = "unstable-v2")]
-use crate::codecs::presence_coding::{self, PresenceCoding};
 use crate::codecs::rle::decode_byte_rle;
 use crate::codecs::varint::{parse_varint_vec, parse_varint_vec_all};
-#[cfg(feature = "unstable-v2")]
-use crate::decoder::Alp;
 #[cfg(feature = "unstable-v2")]
 use crate::decoder::IntLogical;
 #[cfg(feature = "unstable-v2")]
@@ -26,10 +22,8 @@ impl<'a> RawStream<'a> {
     /// Decode a boolean stream (presence or bool data) into a packed bitvector.
     ///
     /// The logical encoding names how the bits are stored:
-    /// - tag `0x01` (`logical = Rle`): byte-RLE compressed bitmap, decompressed
-    ///   into an owned `BitVec`.
+    /// - `logical = Rle`: byte-RLE compressed bitmap, decompressed into an owned `BitVec`.
     /// - `logical = None`: raw bitmap, borrowed straight from the tile bytes.
-    /// - tag `0x02` (`logical = Runs` or `Sparse`): the presence codings, built into an owned `BitVec`.
     ///
     /// The result is always exactly `num_values` bits.
     pub(crate) fn decode_bitvec(self, dec: &mut Decoder) -> MltResult<Cow<'a, BitSlice<u8, Lsb0>>> {
@@ -48,15 +42,6 @@ impl<'a> RawStream<'a> {
             {
                 fail_if_invalid_stream_size(self.data.len(), num_bytes)?;
                 Ok(Cow::Borrowed(&self.data.view_bits::<Lsb0>()[..num_values]))
-            }
-            #[cfg(feature = "unstable-v2")]
-            LogicalEncoding::Bool(logical @ (BoolLogical::Runs | BoolLogical::Sparse)) => {
-                let coding = PresenceCoding::of_logical(logical)
-                    .expect("runs and sparse are presence codings");
-                let (rest, bits) =
-                    presence_coding::read(self.data, self.meta.num_values, coding, dec)?;
-                fail_if_invalid_stream_size(self.data.len() - rest.len(), self.data.len())?;
-                Ok(bits)
             }
             LogicalEncoding::Bool(_)
             | LogicalEncoding::Int(_)
@@ -113,36 +98,6 @@ impl<'a> RawStream<'a> {
         result
     }
 
-    /// Decode a Framed, Exception-Free ALP stream's offsets back into the scaled integers they were measured from.
-    ///
-    /// Unlike [`Self::decode_ints`] this picks the physical word width from the stream rather
-    /// than from the output type, so that `FastPFOR`'s `u32` words reach a `u64` offset stream.
-    #[cfg(feature = "unstable-v2")]
-    pub fn decode_alp_codes(&self, params: Alp, dec: &mut Decoder) -> MltResult<Vec<i64>> {
-        match self.meta.encoding.physical {
-            PhysicalEncoding::FastPFor(_) => self.alp_codes_via::<u32>(params, dec),
-            PhysicalEncoding::None | PhysicalEncoding::VarInt | PhysicalEncoding::BitPacked => {
-                self.alp_codes_via::<u64>(params, dec)
-            }
-        }
-    }
-
-    /// Decode the offsets as `W` words through the decoder's scratch, then lift them onto `params`.
-    #[cfg(feature = "unstable-v2")]
-    fn alp_codes_via<W>(&self, params: Alp, dec: &mut Decoder) -> MltResult<Vec<i64>>
-    where
-        W: DecodeInt<Physical = W> + PhysicalWord + Into<u64>,
-    {
-        let mut buf = mem::take(W::scratch(dec));
-        let result = self.decode_bits::<W>(&mut buf, dec).and_then(|()| {
-            dec.consume_items::<i64>(buf.len())?;
-            Ok(buf.iter().map(|&w| params.code_at(w.into())).collect())
-        });
-        *W::scratch(dec) = buf;
-        W::scratch(dec).clear();
-        result
-    }
-
     /// Decode a stream of `f32`/`f64` from raw little-endian bytes, charging `dec`.
     ///
     /// Raw is the only float representation either wire format can express today.
@@ -156,10 +111,7 @@ impl<'a> RawStream<'a> {
     {
         match self.meta.encoding.logical {
             LogicalEncoding::Float(FloatLogical::None) => {}
-            LogicalEncoding::Float(FloatLogical::Dict | FloatLogical::Alp(_))
-            | LogicalEncoding::Int(_)
-            | LogicalEncoding::Bool(_)
-            | LogicalEncoding::Vertex(_) => {
+            LogicalEncoding::Int(_) | LogicalEncoding::Bool(_) | LogicalEncoding::Vertex(_) => {
                 return Err(MltError::UnsupportedLogicalEncoding(
                     self.meta.encoding.logical,
                     "float streams, which are stored raw",
@@ -173,10 +125,6 @@ impl<'a> RawStream<'a> {
             }
             PhysicalEncoding::FastPFor(_) => {
                 return Err(MltError::UnsupportedPhysicalEncoding("FastPFOR floats"));
-            }
-            #[cfg(feature = "unstable-v2")]
-            PhysicalEncoding::BitPacked => {
-                return Err(MltError::UnsupportedPhysicalEncoding("bit-packed floats"));
             }
         }
         let num = self.meta.num_values.into_usize();
@@ -215,11 +163,6 @@ impl<'a> RawStream<'a> {
             }
             PhysicalEncoding::FastPFor(kind) => {
                 *buf = T::decode_fastpfor(self.data, num_words, kind, dec)?;
-            }
-            #[cfg(feature = "unstable-v2")]
-            PhysicalEncoding::BitPacked => {
-                dec.consume_items::<T>(num_words.into_usize())?;
-                *buf = crate::codecs::bitpack::unpack(self.data, num_words)?;
             }
             PhysicalEncoding::VarInt => {
                 // v2 interleaved-RLE stores no run count on the wire: `num_values`
@@ -476,10 +419,6 @@ mod tests {
     #[rstest]
     #[case::varint(PhysicalEncoding::VarInt)]
     #[case::fastpfor(PhysicalEncoding::FastPFor(FastPForKind::Block256Be))]
-    #[cfg_attr(
-        feature = "unstable-v2",
-        case::fastpfor128(PhysicalEncoding::FastPFor(FastPForKind::Block128Le))
-    )]
     fn decode_floats_rejects_non_raw_physical(#[case] physical: PhysicalEncoding) {
         let stream = float_stream(LogicalEncoding::Float(FloatLogical::None), physical);
         let err = stream.decode_floats::<f32>(&mut dec()).unwrap_err();

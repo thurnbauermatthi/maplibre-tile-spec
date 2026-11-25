@@ -186,10 +186,10 @@ impl GeometryValues {
         let tessellated = !index_buffer.is_empty();
         if let Some(forced) = enc.override_vertex_buffer_type() {
             n += match forced {
-                VertexBufferType::Rans => {
+                VertexBufferType::Predicted => {
                     return Err(MltError::UnsupportedLogicalEncoding(
-                        LogicalEncoding::Vertex(VertexLogical::Rans),
-                        "v1, which has no rANS vertex coding",
+                        LogicalEncoding::Vertex(VertexLogical::Predicted),
+                        "v1, which has no predicted vertex coding",
                     ));
                 }
                 VertexBufferType::Vec2 | VertexBufferType::Morton | VertexBufferType::Hilbert

@@ -17,19 +17,17 @@ use crate::decoder::root02::{check_header_layout, check_vertex_layout};
 use crate::decoder::stream::header02;
 use crate::decoder::stream::header02::{
     Count02, EXTENSION_MASK, Family, HAS_EXPLICIT_COUNT, LOGICAL_MASK, PHYSICAL_MASK, StrLayout,
-    StreamCtx02, XYZ, describe_encoding, shared_coding,
+    StreamCtx02, XYZ, describe_encoding,
 };
 use crate::decoder::{
-    AlpScale, Column02, ColumnCounts, ColumnType02, DataType02, DictionaryType, Extent02,
-    GeoLayout, Interior02, LayerHeader02, LayerLayout, LengthType, NodeKind02, NodePresence,
-    NodeType02, Presence02, SharedDictKind, StreamType, ValuesColumn02,
+    Column02, ColumnCounts, ColumnType02, DataType02, DictionaryType, Extent02, GeoLayout,
+    Interior02, LayerHeader02, LayerLayout, LengthType, NodeKind02, NodePresence, NodeType02,
+    Presence02, SharedDictKind, StreamType, ValuesColumn02,
 };
 use crate::dump::model::{BitField, BlobInfo, DecodeHint};
 use crate::tile::{MAX_NESTED_DEPTH, MValueScope, ZAxis};
 use crate::utils::{parse_string, parse_u8, take};
-use crate::wire::{
-    FloatLogical, IntEncoding, LogicalEncoding, StreamMeta, ValueKind, VertexLogical,
-};
+use crate::wire::{IntEncoding, LogicalEncoding, StreamMeta, ValueKind, VertexLogical};
 use crate::{MltError, MltResult};
 
 impl<'a> Walker<'a> {
@@ -64,35 +62,6 @@ impl<'a> Walker<'a> {
         )?;
         check_header_layout(header, layout)?;
 
-        // The layer's shared presence bitfields, which columns read by index.
-        let mut shared = Vec::with_capacity(usize::from(layout.shared_presence));
-        if layout.shared_presence > 0 {
-            let pi = self.open(input, "shared_presence".to_string());
-            for i in 0..layout.shared_presence {
-                #[expect(
-                    clippy::unnecessary_lazy_evaluations,
-                    reason = "an eager error is dropped on every success"
-                )]
-                let coding = if layout.shared_coded {
-                    let byte;
-                    (input, byte) = self.field(input, "coding", parse_u8, |b| {
-                        Some(match shared_coding(*b) {
-                            Some(c) => format!("0x{b:02X} {c:?}"),
-                            None => format!("0x{b:02X} unknown"),
-                        })
-                    })?;
-                    shared_coding(byte).ok_or_else(|| MltError::PresenceCodingByte(byte))?
-                } else {
-                    PresenceCoding::Bitmap
-                };
-                let bits;
-                (input, bits) =
-                    self.walk_presence02(input, feature_count, coding, &format!("present[{i}]"))?;
-                shared.push(bits);
-            }
-            self.close(pi, input);
-        }
-
         let gi = self.open(input, "geometry".to_string());
         input = self.walk_geometry02(input, header, layout.geometry, feature_count)?;
         self.close(gi, input);
@@ -126,13 +95,13 @@ impl<'a> Walker<'a> {
 
         if column_count > 0 {
             for i in 0..column_count {
-                input = self.walk_column02(input, i, feature_count, &shared)?;
+                input = self.walk_column02(input, i, feature_count)?;
             }
         }
 
         if header.m_values {
             let meshes = layout.geometry == GeoLayout::Meshes;
-            input = self.walk_m_values02(input, counts.m_values, feature_count, &shared, meshes)?;
+            input = self.walk_m_values02(input, counts.m_values, feature_count, meshes)?;
         }
 
         // A well-formed layer consumes its whole body; record any trailing bytes.
@@ -219,23 +188,18 @@ impl<'a> Walker<'a> {
     }
 
     /// `[u8 type][name?][presence bitfield?][data stream]`.
-    ///
-    /// `shared` holds the layer's shared presence bitfields, one of which this
-    /// column may read instead of storing its own.
     fn walk_column02(
         &mut self,
         input: &'a [u8],
         i: u32,
         feature_count: u32,
-        shared: &[BitVec<u8, Lsb0>],
     ) -> MltResult<&'a [u8]> {
         let ci = self.open(input, format!("column[{i}]"));
 
         let (_, typ_byte) = parse_u8(input)?;
-        let shared_count = u8::try_from(shared.len())?;
-        let typ = match Column02::parse(typ_byte, shared_count)? {
+        let typ = match Column02::parse(typ_byte)? {
             Column02::SharedDict(kind) => {
-                let input = self.walk_shared_dict02(input, ci, i, kind, feature_count, shared)?;
+                let input = self.walk_shared_dict02(input, ci, i, kind, feature_count)?;
                 self.close(ci, input);
                 return Ok(input);
             }
@@ -245,7 +209,6 @@ impl<'a> Walker<'a> {
             region: ci,
             label: &format!("column[{i}]"),
             feature_count,
-            shared,
             scoped: false,
         };
         let (input, presence_count) = self.walk_column_header02(input, column, typ)?;
@@ -484,19 +447,16 @@ impl<'a> Walker<'a> {
         mut input: &'a [u8],
         count: u32,
         feature_count: u32,
-        shared: &[BitVec<u8, Lsb0>],
         meshes: bool,
     ) -> MltResult<&'a [u8]> {
-        let shared_count = u8::try_from(shared.len())?;
         for i in 0..count {
             let mi = self.open(input, format!("m_value[{i}]"));
             let (_, typ_byte) = parse_u8(input)?;
-            let typ = ValuesColumn02::parse_m_value(typ_byte, shared_count)?.into();
+            let typ = ValuesColumn02::parse_m_value(typ_byte)?.into();
             let column = Column {
                 region: mi,
                 label: &format!("m_value[{i}]"),
                 feature_count,
-                shared,
                 scoped: meshes,
             };
             // An m-value column runs over the vertices or triangles, whose count only the
@@ -524,16 +484,13 @@ impl<'a> Walker<'a> {
             region: ci,
             label,
             feature_count,
-            shared,
             scoped,
         } = column;
-        let shared_count = u8::try_from(shared.len())?;
-        let typ_byte = typ.to_byte();
         let (mut input, _) = self.byte_field(
             input,
             "type",
             |b| format!("0x{b:02X} {:?} {:?}", typ.presence, typ.data),
-            move |b| column_type_bits02(b, shared_count),
+            column_type_bits02,
         )?;
         if scoped {
             let byte;
@@ -561,23 +518,11 @@ impl<'a> Walker<'a> {
         self.relabel(ci, format!("{label} {opt}{:?}{name_suffix}", typ.data));
 
         // Presence is a raw LSB0 bitfield, not a stream, and counts the data.
-        // A shared bitfield was already walked at the layer root, so only its
-        // popcount is needed here.
         let presence_count = match typ.presence {
             Presence02::AllPresent => feature_count,
             Presence02::Inline(coding) => {
                 let bits;
                 (input, bits) = self.walk_presence02(input, feature_count, coding, "present")?;
-                u32::try_from(bits.count_ones())?
-            }
-            Presence02::Shared(index) => {
-                #[expect(
-                    clippy::unnecessary_lazy_evaluations,
-                    reason = "an eager error is dropped on every success"
-                )]
-                let bits = shared
-                    .get(usize::from(index))
-                    .ok_or_else(|| MltError::ParsingColumnType(typ_byte))?;
                 u32::try_from(bits.count_ones())?
             }
         };
@@ -598,20 +543,7 @@ impl<'a> Walker<'a> {
         }
 
         let ctx = StreamCtx02::Property(typ.data);
-        let (mut input, meta) =
-            self.walk_stream02(input, ctx, count, "data", hint_for(typ.data))?;
-
-        // A dictionary column's data stream holds codes, and the values follow.
-        if meta.encoding.logical == LogicalEncoding::Float(FloatLogical::Dict) {
-            let ctx = StreamCtx02::PropertyDictionary(typ.data);
-            (input, _) = self.walk_stream02(
-                input,
-                ctx,
-                Count02::Implied(meta.num_values),
-                "dictionary",
-                hint_for(typ.data),
-            )?;
-        }
+        let (input, _) = self.walk_stream02(input, ctx, count, "data", hint_for(typ.data))?;
         Ok(input)
     }
 
@@ -623,7 +555,6 @@ impl<'a> Walker<'a> {
         i: u32,
         kind: SharedDictKind,
         feature_count: u32,
-        shared: &[BitVec<u8, Lsb0>],
     ) -> MltResult<&'a [u8]> {
         let (mut input, _) = self.byte_field(
             input,
@@ -691,16 +622,15 @@ impl<'a> Walker<'a> {
             }
         }
 
-        let shared_count = u8::try_from(shared.len())?;
         for child in 0..child_count {
             let cc = self.open(input, format!("child[{child}]"));
             let (_, child_byte) = parse_u8(input)?;
-            let child_typ = ColumnType02::parse(child_byte, shared_count)?;
+            let child_typ = ColumnType02::parse(child_byte)?;
             (input, _) = self.byte_field(
                 input,
                 "type",
                 |b| format!("0x{b:02X} {:?} {:?}", child_typ.presence, child_typ.data),
-                move |b| column_type_bits02(b, shared_count),
+                column_type_bits02,
             )?;
             let suffix;
             (input, suffix) =
@@ -713,16 +643,6 @@ impl<'a> Walker<'a> {
                     let bits;
                     (input, bits) =
                         self.walk_presence02(input, feature_count, coding, "present")?;
-                    u32::try_from(bits.count_ones())?
-                }
-                Presence02::Shared(index) => {
-                    #[expect(
-                        clippy::unnecessary_lazy_evaluations,
-                        reason = "an eager error is dropped on every success"
-                    )]
-                    let bits = shared
-                        .get(usize::from(index))
-                        .ok_or_else(|| MltError::ParsingColumnType(child_byte))?;
                     u32::try_from(bits.count_ones())?
                 }
             };
@@ -805,15 +725,14 @@ impl<'a> Walker<'a> {
         coding: PresenceCoding,
         label: &str,
     ) -> MltResult<(&'a [u8], BitVec<u8, Lsb0>)> {
-        // Runs and sparse presence are self-delimiting, so the span is whatever reading took.
+        // Byte-RLE presence is self-delimiting, so the span is whatever reading took.
         let (rest, bits) = presence_coding::read(input, feature_count, coding, &mut self.parser)?;
         let taken = input.len() - rest.len();
         let bytes = &input[..taken];
         self.stream_blob(
             bytes,
             bytes.len(),
-            // The label stays the region's name; the coding is already on the
-            // nibble breakdown, or on a shared field's own coding byte.
+            // The label stays the region's name; the coding is already on the nibble breakdown.
             label.to_string(),
             BlobInfo {
                 meta: StreamMeta::new(
@@ -823,9 +742,7 @@ impl<'a> Walker<'a> {
                 ),
                 hint: match coding {
                     PresenceCoding::Bitmap => DecodeHint::PackedBits,
-                    other @ (PresenceCoding::Runs | PresenceCoding::Sparse) => {
-                        DecodeHint::PresenceCoded(other)
-                    }
+                    PresenceCoding::ByteRle => DecodeHint::PresenceCoded(coding),
                 },
             },
         );
@@ -883,29 +800,7 @@ impl<'a> Walker<'a> {
             )?;
             byte_length
         };
-        // Framed, Exception-Free ALP's parameters ride in the header, after the byte length.
-        if matches!(
-            stream.meta.encoding.logical,
-            LogicalEncoding::Float(FloatLogical::Alp(_))
-        ) {
-            (c, _) = self.field(
-                c,
-                "alp_scale",
-                |i| parse_u8(i),
-                |v| {
-                    AlpScale::from_byte(*v)
-                        .ok()
-                        .map(|s| format!("e={}, f={}", s.e, s.f))
-                },
-            )?;
-            (c, _) = self.field(
-                c,
-                "alp_base",
-                |i| parse_varint::<i64>(i),
-                |v| Some(v.to_string()),
-            )?;
-        }
-        // So does the z grid of (x, y, z) vertices.
+        // The z grid of (x, y, z) vertices rides in the header, after the byte length.
         if matches!(
             stream.meta.encoding.logical,
             LogicalEncoding::Vertex(VertexLogical::Xyz(..))
@@ -932,17 +827,6 @@ impl<'a> Walker<'a> {
         if self.off(after_payload) != self.off(rest) {
             return Err(MltError::NotImplemented("v2 stream header re-walk desync"));
         }
-        // A dictionary's codes and Framed, Exception-Free ALP's integers are integer streams, whatever the column's type is.
-        // A rANS payload needs the topology to decode, so the dump shows its parts.
-        let hint = match stream.meta.encoding.logical {
-            LogicalEncoding::Float(FloatLogical::Dict) => DecodeHint::U32,
-            LogicalEncoding::Float(FloatLogical::Alp(params)) => DecodeHint::Alp(params),
-            LogicalEncoding::Vertex(VertexLogical::Rans) => DecodeHint::Rans,
-            LogicalEncoding::Float(FloatLogical::None)
-            | LogicalEncoding::Int(_)
-            | LogicalEncoding::Bool(_)
-            | LogicalEncoding::Vertex(_) => hint,
-        };
         self.stream_blob(
             payload,
             payload.len(),
@@ -966,8 +850,6 @@ struct Column<'l> {
     /// What to call it, which its data type and name are appended to.
     label: &'l str,
     feature_count: u32,
-    /// The layer's shared presence bitfields, one of which the column may read.
-    shared: &'l [BitVec<u8, Lsb0>],
     /// Whether a scope byte follows the type byte, as it does for an m-value column of a Meshes layer.
     scoped: bool,
 }
@@ -1063,25 +945,14 @@ fn hint_for(typ: DataType02) -> DecodeHint {
 }
 
 /// Bit breakdown of the v2 layer layout byte:
-/// - shared coding flag (7),
-/// - shared presence bitfield count (6-4),
+/// - reserved (7-4),
 /// - geometry layout (3-0).
 fn layer_layout_bits02(byte: u8) -> Vec<BitField> {
-    let (shared_coded, shared_presence, geometry) = LayerLayout::fields(byte);
+    let (_, geometry) = LayerLayout::fields(byte);
     let name_geo = GeoLayout::try_from(geometry)
         .map_or_else(|_| format!("reserved({geometry})"), |g| format!("{g:?}"));
-    let coded = if shared_coded {
-        "shared bitfields name their coding"
-    } else {
-        "shared bitfields are bitmaps"
-    };
     vec![
-        BitField::mask(LayerLayout::SHARED_CODED_BIT, byte, coded.to_string()),
-        BitField::mask(
-            LayerLayout::SHARED_PRESENCE_MASK,
-            byte,
-            format!("shared presence bitfields = {shared_presence}"),
-        ),
+        BitField::mask(LayerLayout::RESERVED_MASK, byte, "reserved".to_string()),
         BitField::mask(
             LayerLayout::GEO_LAYOUT_MASK,
             byte,
@@ -1128,9 +999,9 @@ fn layer_header_bits02(byte: u8, header: LayerHeader02) -> Vec<BitField> {
 }
 
 /// Bit breakdown of the v2 column type byte: presence (7-4), data type (3-0).
-fn column_type_bits02(byte: u8, shared_count: u8) -> Vec<BitField> {
+fn column_type_bits02(byte: u8) -> Vec<BitField> {
     let (presence, data) = ColumnType02::fields(byte);
-    let name_pr = Presence02::parse(presence, shared_count).map_or_else(
+    let name_pr = Presence02::parse(presence).map_or_else(
         || format!("reserved({})", presence >> 4),
         |p| format!("{p:?}"),
     );

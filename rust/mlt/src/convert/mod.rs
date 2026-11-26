@@ -206,7 +206,7 @@ enum Profile {
     /// The fewest stored bytes: `--sort auto`, which reorders features
     #[value(name = "min_size", alias = "min-size")]
     MinSize,
-    /// Small binary diffs between releases: `--no-fsst --no-shared-dict`
+    /// Small binary diffs between releases: `--no-fsst --no-fastpfor --no-shared-dict`
     Diffable,
     /// The quickest encode: no triangles, sorts, `FSST`, `FastPFOR` or shared dictionaries, so tiles come out larger
     #[value(name = "fast_encoding", alias = "fast-encoding")]

@@ -5,8 +5,9 @@ import { OffsetType } from "../metadata/tile/offsetType";
 import { PhysicalLevelTechnique } from "../metadata/tile/physicalLevelTechnique";
 import { LogicalLevelTechnique } from "../metadata/tile/logicalLevelTechnique";
 import IntWrapper from "../decoding/intWrapper";
-import { encodeBooleanRle, encodeStrings, createStringLengths, concatenateBuffers } from "./encodingUtils";
+import { encodeUtf8Strings, concatenateBuffers } from "./encodingUtils";
 import { encodeVarintInt32Value, encodeVarintInt32 } from "./integerEncodingUtils";
+import { encodePresentStream } from "./propertyEncoder";
 import type { StreamMetadata } from "../metadata/tile/streamMetadataDecoder";
 import type { LogicalStreamType } from "../metadata/tile/logicalStreamType";
 
@@ -18,23 +19,16 @@ import type { LogicalStreamType } from "../metadata/tile/logicalStreamType";
 export function encodePlainStrings(strings: (string | null)[]): Uint8Array {
     const hasNull = strings.some((s) => s === null);
     const nonNullStrings = strings.filter((s): s is string => s !== null);
-    const stringBytes = encodeStrings(nonNullStrings);
+    const { bytes: stringBytes, lengths } = encodeUtf8Strings(nonNullStrings);
 
     const streams: Uint8Array[] = [];
 
     // Add PRESENT stream if nulls exist
     if (hasNull) {
-        const nullabilityValues = strings.map((s) => s !== null);
-        streams.push(
-            createStream(PhysicalStreamType.PRESENT, encodeBooleanRle(nullabilityValues), {
-                technique: PhysicalLevelTechnique.VARINT,
-                count: nullabilityValues.length,
-            }),
-        );
+        streams.push(encodePresentStream(strings.map((s) => s !== null)));
     }
 
     // Add LENGTH stream
-    const lengths = createStringLengths(nonNullStrings);
     streams.push(
         createStream(PhysicalStreamType.LENGTH, encodeVarintInt32(lengths), {
             logical: { lengthType: LengthType.VAR_BINARY },
@@ -59,44 +53,29 @@ export function encodePlainStrings(strings: (string | null)[]): Uint8Array {
  * @returns Encoded Uint8Array that can be passed to decodeString
  */
 export function encodeDictionaryStrings(strings: (string | null)[]): Uint8Array {
-    const hasNull = strings.some((s) => s === null);
-    const nonNullStrings = strings.filter((s): s is string => s !== null);
-
-    // Create dictionary of unique strings
-    const uniqueStrings = Array.from(new Set(nonNullStrings));
-    const stringMap = new Map(uniqueStrings.map((s, i) => [s, i]));
-    const offsets = nonNullStrings.map((s) => {
-        const offset = stringMap.get(s);
-        if (offset === undefined) {
-            throw new Error(`String not found in dictionary: ${s}`);
+    const codes = new Map<string, number>();
+    const uniqueStrings: string[] = [];
+    const offsets = new Uint32Array(strings.length);
+    let count = 0;
+    for (const string of strings) {
+        if (string === null) continue;
+        let code = codes.get(string);
+        if (code === undefined) {
+            code = uniqueStrings.length;
+            codes.set(string, code);
+            uniqueStrings.push(string);
         }
-        return offset;
-    });
-
-    const stringBytes = encodeStrings(uniqueStrings);
-    const lengths = createStringLengths(uniqueStrings);
+        offsets[count++] = code;
+    }
+    const hasNull = count < strings.length;
+    const { bytes: stringBytes, lengths } = encodeUtf8Strings(uniqueStrings);
 
     const streams: Uint8Array[] = [];
 
     // Add PRESENT stream if nulls exist
     if (hasNull) {
-        const nullabilityValues = strings.map((s) => s !== null);
-        streams.push(
-            createStream(PhysicalStreamType.PRESENT, encodeBooleanRle(nullabilityValues), {
-                technique: PhysicalLevelTechnique.VARINT,
-                count: nullabilityValues.length,
-            }),
-        );
+        streams.push(encodePresentStream(strings.map((s) => s !== null)));
     }
-
-    // Add OFFSET stream
-    streams.push(
-        createStream(PhysicalStreamType.OFFSET, encodeVarintInt32(new Uint32Array(offsets)), {
-            logical: { offsetType: OffsetType.STRING },
-            technique: PhysicalLevelTechnique.VARINT,
-            count: offsets.length,
-        }),
-    );
 
     // Add LENGTH stream (for dictionary)
     streams.push(
@@ -104,6 +83,15 @@ export function encodeDictionaryStrings(strings: (string | null)[]): Uint8Array 
             logical: { lengthType: LengthType.DICTIONARY },
             technique: PhysicalLevelTechnique.VARINT,
             count: lengths.length,
+        }),
+    );
+
+    // Add OFFSET stream
+    streams.push(
+        createStream(PhysicalStreamType.OFFSET, encodeVarintInt32(offsets.subarray(0, count)), {
+            logical: { offsetType: OffsetType.STRING },
+            technique: PhysicalLevelTechnique.VARINT,
+            count,
         }),
     );
 

@@ -448,7 +448,7 @@ pub enum Profile {
     Native(Network),
     /// The fewest stored bytes: no triangles, Hilbert and feature-ID sort, and every extension.
     MinSize,
-    /// Small binary diffs between releases: no triangles, no `FSST` or shared dictionaries.
+    /// Small binary diffs between releases: no triangles, no `FSST`, `FastPFOR` or shared dictionaries.
     Diffable,
     /// The quickest encode: no triangles, sorts or optional codecs, so tiles come out larger.
     FastEncoding,
@@ -602,29 +602,7 @@ impl EncoderConfig {
                 allow_vertex_dict: true,
                 compressed_selection: false,
             },
-            Profile::Diffable => Self {
-                #[cfg(feature = "unstable-v2")]
-                wire_version: WireVersion::V01,
-                tessellation: Tessellation::Off,
-                attempt_spatial_morton_sort: false,
-                attempt_spatial_hilbert_sort: false,
-                attempt_id_sort: false,
-                vertex_sort: false,
-                allow_fsst: false,
-                allow_fastpfor: true,
-                allow_shared_dict: false,
-                #[cfg(feature = "unstable-v2")]
-                allow_presence_rle: false,
-                #[cfg(feature = "unstable-v2")]
-                allow_row_shapes: false,
-                #[cfg(feature = "unstable-v2")]
-                allow_triangles_only: false,
-                #[cfg(feature = "unstable-v2")]
-                allow_predicted_vertices: false,
-                allow_vertex_dict: true,
-                compressed_selection: false,
-            },
-            Profile::FastEncoding => Self {
+            Profile::Diffable | Profile::FastEncoding => Self {
                 #[cfg(feature = "unstable-v2")]
                 wire_version: WireVersion::V01,
                 tessellation: Tessellation::Off,

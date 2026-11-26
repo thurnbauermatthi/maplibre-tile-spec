@@ -6,9 +6,13 @@ import { LengthType } from "../metadata/tile/lengthType";
 import { OffsetType } from "../metadata/tile/offsetType";
 import IntWrapper from "./intWrapper";
 import { type Column, type Field, ColumnScope, ComplexType, ScalarType } from "../metadata/tileset/tilesetMetadata";
-import { encodeBooleanRle, encodeStrings, createStringLengths } from "../encoding/encodingUtils";
+import { encodeBooleanRle, encodeUtf8Strings } from "../encoding/encodingUtils";
 import { encodeVarintInt32Value, encodeVarintInt32 } from "../encoding/integerEncodingUtils";
-import type { RleEncodedStreamMetadata, StreamMetadata } from "../metadata/tile/streamMetadataDecoder";
+import {
+    decodeStreamMetadata,
+    type RleEncodedStreamMetadata,
+    type StreamMetadata,
+} from "../metadata/tile/streamMetadataDecoder";
 import type { LogicalStreamType } from "../metadata/tile/logicalStreamType";
 
 /**
@@ -171,8 +175,7 @@ export function encodeSharedDictionary(
 } {
     const { useFsst = false, dictionaryType = DictionaryType.SHARED } = options;
 
-    const encodedDictionary = encodeStrings(dictionaryStrings);
-    const dictionaryLengths = createStringLengths(dictionaryStrings);
+    const { bytes: encodedDictionary, lengths: dictionaryLengths } = encodeUtf8Strings(dictionaryStrings);
 
     const lengthStream = createStream(
         PhysicalStreamType.LENGTH,
@@ -367,4 +370,16 @@ export function concatenateBuffers(...buffers: Uint8Array[]): Uint8Array {
     }
 
     return result;
+}
+
+/** The headers of streams written back to back, which is how an encoder returns those of a column. */
+export function decodeStreamHeaders(data: Uint8Array): StreamMetadata[] {
+    const offset = new IntWrapper(0);
+    const headers: StreamMetadata[] = [];
+    while (offset.get() < data.length) {
+        const header = decodeStreamMetadata(data, offset);
+        offset.add(header.byteLength);
+        headers.push(header);
+    }
+    return headers;
 }

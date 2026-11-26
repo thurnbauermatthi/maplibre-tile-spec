@@ -128,7 +128,7 @@ Pick a dataset below; the [method](#method) applies to all of them.
     Here is our current recommendation for this workflow (with a few caveats, read table below)
 
     ```terminal
-    mlt convert --mlt-version 2 --sort none --no-shared-dict --no-fsst --fields ./string_to_field_config.toml new.mbtiles new.mlt2.mbtiles
+    mlt convert --mlt-version 2 --sort none --no-shared-dict --no-fsst --no-fastpfor --fields ./string_to_field_config.toml new.mbtiles new.mlt2.mbtiles
     mbtiles diff --strict --patch-type bin-diff-raw old.mlt2.mbtiles new.mlt2.mbtiles old_to_new.bindiff
     ```
 
@@ -138,8 +138,8 @@ Pick a dataset below; the [method](#method) applies to all of them.
     | `--sort none` | Likely use | Features keep their source order, so an edited feature does not move others. *Good/bad for bsdiff may be different based on data.* |
     | `--no-shared-dict` | Use | One new string would renumber the dictionary shared by several columns. |
     | `--no-fsst` | Use | FSST trains its symbol table on the column, so one changed string can change every compressed string. |
+    | `--no-fastpfor` | Use | FastPFOR packs blocks of 256 values and stores larger values separately as exceptions. An edit can change the chosen width, block metadata, or exception arrays shared across a page. On road-network tiles with nested connection lists, the patches came out 6x smaller without it, for 11% larger tiles. |
     | `--fields` | Use | Numbers parsed out of strings are smaller as typed columns, and an edit changes only the values it touches. |
-    | `--no-fastpfor` | Likely Avoid | The patch stays the same, and the tiles grow. *Good/bad for bsdiff may be different based on data.* |
     | `--tile-compression gzip` | Avoid | Deflate output differs after the first change. If wanted, compress the patch instead. |
     | `--tessellate` | Avoid | Adds triangles that change with every polygon edit, and `--tessellate=always` grows the tiles by a fifth or more. |
 

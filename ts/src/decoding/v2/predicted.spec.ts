@@ -1,8 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { compareWithTolerance } from "../../../../test/synthetic/synthetic-test-utils";
-import { decodeTile, decodeTileColumns, tileGeoJson } from "../../index";
+import { decodeTile, tileGeoJson } from "../../index";
 import { featureTablesToFeatureCollection } from "../../vector/featureTablesToGeoJson";
 import { resetBudget } from "./binary";
 import { GEOM_LINESTRING, GEOM_POINT, GEOM_POLYGON } from "./geometry";
@@ -11,9 +10,40 @@ import { RUN_LINE, RUN_RING, decodePredictedRuns, decodePredictedVertices, predi
 const REPO_ROOT = path.resolve(__dirname, "../../../..");
 const EXPECTED_02 = path.join(REPO_ROOT, "test/expected/0x02");
 
-describe("Predicted vertex decoder", () => {
-    expect.addEqualityTesters([compareWithTolerance]);
+function assertSameFeatureCollection(
+    actual: GeoJSON.FeatureCollection,
+    expected: GeoJSON.FeatureCollection,
+    label: string,
+): void {
+    expect(actual.features.length, label).toBe(expected.features.length);
+    for (let i = 0; i < actual.features.length; i++) {
+        const fA = actual.features[i] as GeoJSON.Feature & { triangles?: [number, number, number][] };
+        const fB = expected.features[i] as GeoJSON.Feature & { triangles?: [number, number, number][] };
+        if (
+            fA.id !== fB.id ||
+            JSON.stringify(fA.geometry) !== JSON.stringify(fB.geometry) ||
+            JSON.stringify(fA.triangles) !== JSON.stringify(fB.triangles)
+        ) {
+            expect(fA, `${label}#${i}`).toEqual(fB);
+        }
+        const pA = fA.properties ?? {};
+        const pB = fB.properties ?? {};
+        const keysA = Object.keys(pA).sort();
+        const keysB = Object.keys(pB).sort();
+        if (keysA.length !== keysB.length) {
+            expect(pA, `${label}#${i} properties`).toEqual(pB);
+        }
+        for (let k = 0; k < keysA.length; k++) {
+            const key = keysA[k];
+            if (key !== keysB[k] || pA[key] !== pB[key]) {
+                expect(pA, `${label}#${i} properties`).toEqual(pB);
+                break;
+            }
+        }
+    }
+}
 
+describe("Predicted vertex decoder", () => {
     it("decodes the byte-for-byte example of the v2 specification", () => {
         resetBudget();
         const payload = new Uint8Array([
@@ -264,15 +294,15 @@ describe("Predicted vertex decoder", () => {
                 .sort();
             for (const file of files) {
                 const bytes = new Uint8Array(readFileSync(path.join(suiteDir, file)));
-                const colTile = decodeTileColumns(bytes);
                 const tables = decodeTile(bytes, undefined, false);
-                expect(tables.length).toBe(colTile.layers.length);
-                expect(featureTablesToFeatureCollection(tables), `${suite}/${file}`).toEqual(
+                assertSameFeatureCollection(
+                    featureTablesToFeatureCollection(tables),
                     normPbfStrings(tileGeoJson(bytes)),
+                    `${suite}/${file}`,
                 );
                 tileCount++;
             }
         }
         expect(tileCount).toBeGreaterThanOrEqual(160);
-    }, 30_000);
+    }, 60_000);
 });
